@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\BookingResource;
 use App\Models\Booking;
 use App\Models\Business;
 use App\Models\User;
@@ -28,7 +29,7 @@ class CalendarController extends Controller
         ]);
 
         $q = Booking::query()
-            ->with(['service', 'staff', 'location', 'items.service']);
+            ->with(['service', 'staff', 'business', 'location', 'items.service']);
 
         $business = null;
         if ($actor->isSuperAdmin()) {
@@ -72,7 +73,7 @@ class CalendarController extends Controller
         }
 
         return response()->json([
-            'data' => $q->orderBy('starts_at')->get(),
+            'data' => BookingResource::collection($q->orderBy('starts_at')->get()),
         ]);
     }
 }

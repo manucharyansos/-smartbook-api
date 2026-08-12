@@ -843,7 +843,12 @@ class BookingController extends Controller
         }
 
         $booking->update(['status' => 'confirmed']);
-        return response()->json(['ok' => true, 'data' => $booking]);
+        return response()->json([
+            'ok' => true,
+            'data' => new BookingResource(
+                $booking->fresh()->load(['service', 'staff', 'business', 'location', 'client', 'room', 'items.service'])
+            ),
+        ]);
     }
 
     public function noShow(Request $request, Booking $booking)
@@ -888,7 +893,13 @@ class BookingController extends Controller
             app(GiftCardService::class)->restoreForBooking($actor, $booking);
         } catch (\Throwable $e) {}
 
-        return response()->json(['ok' => true]);
+        return response()->json([
+            'ok' => true,
+            'cancelled_booking_id' => (int) $booking->id,
+            'data' => new BookingResource(
+                $booking->fresh()->load(['service', 'staff', 'business', 'location', 'client', 'room', 'items.service'])
+            ),
+        ]);
     }
 
     public function done(Request $request, Booking $booking)
@@ -912,7 +923,12 @@ class BookingController extends Controller
             }
         } catch (\Throwable $e) {}
 
-        return response()->json(['ok' => true]);
+        return response()->json([
+            'ok' => true,
+            'data' => new BookingResource(
+                $booking->fresh()->load(['service', 'staff', 'business', 'location', 'client', 'room', 'items.service'])
+            ),
+        ]);
     }
 
     /**

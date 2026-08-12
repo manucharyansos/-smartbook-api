@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BookingBlock;
+use App\Models\Business;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\ValidationException;
@@ -13,6 +14,8 @@ class CalendarBlockController extends Controller
     public function index(Request $request)
     {
         $user = $request->user();
+        $business = $user?->business ?? Business::query()->find((int) $user?->business_id);
+        $timezone = $business?->effectiveTimezone() ?? 'Asia/Yerevan';
 
         $validated = $request->validate([
             'from' => ['required', 'date_format:Y-m-d'],
@@ -21,8 +24,8 @@ class CalendarBlockController extends Controller
             'location_id' => ['nullable', 'integer'],
         ]);
 
-        $from = Carbon::createFromFormat('Y-m-d', $validated['from'])->startOfDay();
-        $to = Carbon::createFromFormat('Y-m-d', $validated['to'])->endOfDay();
+        $from = Carbon::createFromFormat('Y-m-d', $validated['from'], $timezone)->startOfDay()->setTimezone('UTC');
+        $to = Carbon::createFromFormat('Y-m-d', $validated['to'], $timezone)->endOfDay()->setTimezone('UTC');
 
         $q = BookingBlock::query()
             ->where('business_id', $user->business_id)
@@ -46,13 +49,15 @@ class CalendarBlockController extends Controller
         }
 
         return response()->json([
-            'data' => $q->get(),
+            'data' => $q->get()->map(fn (BookingBlock $block) => $this->serializeBlock($block, $timezone)),
         ]);
     }
 
     public function store(Request $request)
     {
         $user = $request->user();
+        $business = $user?->business ?? Business::query()->find((int) $user?->business_id);
+        $timezone = $business?->effectiveTimezone() ?? 'Asia/Yerevan';
 
         $validated = $request->validate([
             // Accept "Y-m-d H:i" from frontend (we send that)
@@ -62,8 +67,8 @@ class CalendarBlockController extends Controller
             'staff_id'  => ['nullable', 'integer'],
         ]);
 
-        $start = $this->parseDt($validated['starts_at']);
-        $end   = $this->parseDt($validated['ends_at']);
+        $start = $this->parseDt($validated['starts_at'], $timezone)?->setTimezone('UTC');
+        $end   = $this->parseDt($validated['ends_at'], $timezone)?->setTimezone('UTC');
 
         if (!$start || !$end) {
             throw ValidationException::withMessages([
@@ -106,7 +111,7 @@ class CalendarBlockController extends Controller
             'reason' => $validated['reason'] ?? null,
         ]);
 
-        return response()->json(['data' => $block], 201);
+        return response()->json(['data' => $this->serializeBlock($block, $timezone)], 201);
     }
 
     public function destroy(Request $request, BookingBlock $block)
@@ -122,30 +127,42 @@ class CalendarBlockController extends Controller
         return response()->json(['ok' => true]);
     }
 
-    private function parseDt(string $dt): ?Carbon
+    private function parseDt(string $dt, string $timezone): ?Carbon
     {
         $dt = trim($dt);
 
         // accept "Y-m-d H:i" or "Y-m-d H:i:s" or ISO
         try {
             if (str_contains($dt, 'T')) {
-                return Carbon::parse($dt);
+                return Carbon::parse($dt, $timezone);
             }
 
             // "Y-m-d H:i"
             if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/', $dt)) {
-                return Carbon::createFromFormat('Y-m-d H:i', $dt);
+                return Carbon::createFromFormat('Y-m-d H:i', $dt, $timezone);
             }
 
             // "Y-m-d H:i:s"
             if (preg_match('/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/', $dt)) {
-                return Carbon::createFromFormat('Y-m-d H:i:s', $dt);
+                return Carbon::createFromFormat('Y-m-d H:i:s', $dt, $timezone);
             }
 
             // fallback parse
-            return Carbon::parse($dt);
+            return Carbon::parse($dt, $timezone);
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function serializeBlock(BookingBlock $block, string $timezone): array
+    {
+        return [
+            'id' => (int) $block->id,
+            'business_id' => (int) $block->business_id,
+            'staff_id' => $block->staff_id ? (int) $block->staff_id : null,
+            'reason' => $block->reason,
+            'starts_at' => $block->starts_at?->copy()->setTimezone($timezone)->format('Y-m-d H:i:s'),
+            'ends_at' => $block->ends_at?->copy()->setTimezone($timezone)->format('Y-m-d H:i:s'),
+        ];
     }
 }

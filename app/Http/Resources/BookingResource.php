@@ -4,11 +4,16 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Carbon;
 
 class BookingResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        $timezone = $this->relationLoaded('business') && $this->business
+            ? $this->business->effectiveTimezone()
+            : 'Asia/Yerevan';
+
         return [
             'id' => $this->id,
             'group_id' => $this->group_id,
@@ -27,8 +32,11 @@ class BookingResource extends JsonResource
             'source_meta' => $this->source_meta,
 
             'status' => $this->status,
-            'starts_at' => optional($this->starts_at)->format('Y-m-d H:i:s') ?? $this->starts_at,
-            'ends_at' => optional($this->ends_at)->format('Y-m-d H:i:s') ?? $this->ends_at,
+            // Admin booking forms and calendars exchange business-local wall-clock
+            // values. Datetimes remain UTC in the database, but the API must not
+            // expose a UTC value without an offset and let the browser guess.
+            'starts_at' => $this->businessLocalDateTime($this->starts_at, $timezone),
+            'ends_at' => $this->businessLocalDateTime($this->ends_at, $timezone),
 
             'final_price' => $this->final_price,
             'currency' => $this->currency,
@@ -105,5 +113,18 @@ class BookingResource extends JsonResource
                 })->values();
             }),
         ];
+    }
+
+    private function businessLocalDateTime(mixed $value, string $timezone): mixed
+    {
+        if (!$value) {
+            return $value;
+        }
+
+        $date = $value instanceof Carbon
+            ? $value->copy()
+            : Carbon::parse((string) $value, 'UTC');
+
+        return $date->setTimezone($timezone)->format('Y-m-d H:i:s');
     }
 }
