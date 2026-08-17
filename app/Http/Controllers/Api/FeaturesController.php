@@ -25,11 +25,27 @@ class FeaturesController extends Controller
         $computed = $sub?->computedStatus();
         $trialEndsAt = $sub?->trial_ends_at ? $sub->trial_ends_at->toISOString() : null;
         $daysLeft = $sub?->trial_ends_at ? max(0, now()->diffInDays($sub->trial_ends_at, false)) : null;
+        $reason = null;
+
+        if ($business?->status === 'suspended') {
+            $reason = 'business_suspended';
+        } elseif ($business?->billing_status === 'suspended') {
+            $reason = 'billing_suspended';
+        } elseif (!$sub) {
+            $reason = 'no_subscription';
+        } elseif (!$sub->isActive()) {
+            $reason = 'subscription_inactive';
+        }
 
         return response()->json([
             'data' => [
                 'business_id' => $business?->id,
                 'business_type' => $business?->business_type,
+                'business_status' => $business?->status,
+                'billing_status' => $business?->billing_status,
+                'is_billable' => $reason === null,
+                'reason' => $reason,
+                'support_whatsapp' => config('app.support_whatsapp'),
 
                 // plan
                 'plan_code' => $sub?->plan?->code,

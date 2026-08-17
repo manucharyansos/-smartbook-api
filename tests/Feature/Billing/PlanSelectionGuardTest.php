@@ -98,3 +98,36 @@ it('blocks a downgrade when current usage exceeds the selected plan', function (
         ->assertJsonPath('data.exceeded.0', 'staff')
         ->assertJsonPath('data.usage.active_staff', 2);
 });
+
+it('cancels an older pending invoice when the owner selects another plan', function () {
+    $business = Business::factory()->onboardingCompleted()->create();
+    $owner = User::factory()->owner($business->id)->create();
+    createPlanForSelection();
+    createPlanForSelection([
+        'name' => 'Studio',
+        'code' => 'studio',
+        'price' => 14900,
+        'monthly_price' => 14900,
+        'yearly_price' => 149000,
+        'seats' => 5,
+        'staff_limit' => 5,
+        'locations' => 2,
+        'features' => ['staff_limit' => 5, 'services_limit' => 30],
+        'sort_order' => 2,
+    ]);
+
+    Sanctum::actingAs($owner);
+
+    $firstInvoiceId = $this->postJson('/api/billing/upgrade-request', [
+        'plan_code' => 'start',
+        'billing_cycle' => 'monthly',
+    ])->assertCreated()->json('data.id');
+
+    $secondInvoiceId = $this->postJson('/api/billing/upgrade-request', [
+        'plan_code' => 'studio',
+        'billing_cycle' => 'monthly',
+    ])->assertCreated()->json('data.id');
+
+    $this->assertDatabaseHas('invoices', ['id' => $firstInvoiceId, 'status' => 'cancelled']);
+    $this->assertDatabaseHas('invoices', ['id' => $secondInvoiceId, 'status' => 'pending']);
+});

@@ -21,6 +21,7 @@ In mock mode the bank page is simulated by the frontend route `/mock-bank/idbank
 When real IdBank credentials/docs are available, the remaining work is mainly:
 
 - map checkout payload fields to the bank's official field names
-- verify webhook signature exactly as required by the bank
+- align the existing HMAC verification input/header with the bank's official signature contract
 - switch provider from `idbank_mock` to `idbank`
+- set `BILLING_ALLOW_MOCK_PAYMENTS=false` and enable `IDBANK_LIVE_ENABLED=true` only after end-to-end verification
 - update `.env` values for merchant/terminal/URLs

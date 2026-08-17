@@ -12,6 +12,29 @@ class Subscription extends Model
     public const STATUS_SUSPENDED = 'suspended';
     public const STATUS_CANCELED = 'canceled';
 
+    /**
+     * Vizit's primary workspace tools are included in every current plan.
+     * Merging them at read time also keeps older subscription snapshots usable.
+     */
+    public const CORE_FEATURES = [
+        'calendar',
+        'bookings',
+        'services',
+        'staff_schedules',
+        'public_booking',
+        'client_cabinet',
+        'source_tracking',
+        'analytics',
+        'tasks',
+        'gift_cards',
+        'loyalty',
+        'social_buttons',
+        'multilingual',
+        'dark_mode',
+        'blocks',
+        'rooms',
+    ];
+
     protected $fillable = [
         'business_id',
         'plan_id',
@@ -61,15 +84,17 @@ class Subscription extends Model
 
     public function features(): array
     {
-        return is_array($this->features_snapshot) ? $this->features_snapshot : [];
+        $features = is_array($this->features_snapshot) ? $this->features_snapshot : [];
+
+        foreach (self::CORE_FEATURES as $feature) {
+            $features[$feature] = true;
+        }
+
+        return $features;
     }
 
     public function hasFeature(string $key): bool
     {
-        // Core features should not be gated by plan.
-        // (We keep feature flags for upsells like analytics/loyalty/etc.)
-        if ($key === 'blocks') return true;
-
         $f = $this->features();
         return (bool)($f[$key] ?? false);
     }

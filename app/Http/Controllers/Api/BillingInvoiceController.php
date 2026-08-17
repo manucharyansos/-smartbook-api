@@ -57,6 +57,18 @@ class BillingInvoiceController extends Controller
         $periodDays = $billingCycle === 'yearly' ? 365 : (int) ($plan->duration_days ?: 30);
 
         $business = $user->business()->with(['subscription.plan'])->firstOrFail();
+
+        if ($business->status === 'suspended') {
+            return response()->json([
+                'message' => 'Բիզնեսը կասեցված է։ Վճարումից առաջ կապվիր աջակցության հետ։',
+                'code' => 'business_suspended',
+            ], 409);
+        }
+
+        if (!$plan->supportsBusinessType((string) $business->business_type)) {
+            abort(404);
+        }
+
         $pricing = $this->pricingResolver->resolve($business, $plan, $billingCycle);
 
         $monthlyPrice = (int) $pricing['base_monthly_price'];
@@ -116,6 +128,57 @@ class BillingInvoiceController extends Controller
             ], 409);
         }
 
+        $invoiceMeta = [
+            'billing_cycle' => $billingCycle,
+            'period_days' => $periodDays,
+            'base_monthly_amount' => $monthlyPrice,
+            'effective_monthly_amount' => $effectiveMonthly,
+            'effective_yearly_amount' => $effectiveYearly,
+            'yearly_months_charged' => $billingCycle === 'yearly' ? 10 : 1,
+            'yearly_months_free' => $billingCycle === 'yearly' ? 2 : 0,
+            'full_year_amount' => $billingCycle === 'yearly' ? ($monthlyPrice * 12) : null,
+            'discount_amount' => (int) ($pricing['discount_amount'] ?? 0),
+            'pricing_override_id' => $override?->id,
+            'override_discount_type' => $pricing['discount_type'],
+            'override_discount_value' => $pricing['discount_value'],
+        ];
+
+        $pendingInvoices = Invoice::query()
+            ->where('business_id', $user->business_id)
+            ->where('status', 'pending')
+            ->latest('id')
+            ->get();
+
+        $existing = $invoiceAmount > 0
+            ? $pendingInvoices->first(
+                fn (Invoice $invoice) => (int) $invoice->plan_id === (int) $plan->id
+                    && $this->invoicePricingMatches(
+                        $invoice,
+                        $invoiceAmount,
+                        (string) ($plan->currency ?? 'AMD'),
+                        $invoiceMeta
+                    )
+            )
+            : null;
+
+        foreach ($pendingInvoices as $pendingInvoice) {
+            if ($existing && $pendingInvoice->is($existing)) continue;
+            $this->cancelPendingInvoice($pendingInvoice);
+        }
+
+        if ($existing) {
+            return response()->json([
+                'ok' => true,
+                'mode' => 'invoice',
+                'data' => $existing->load('plan:id,name,code,price,monthly_price,yearly_price,currency,seats,staff_limit'),
+                'provider' => [
+                    'default' => config('billing.providers.default', 'idbank_mock'),
+                    'mode' => config('billing.providers.mode', 'mock'),
+                    'checkout_required' => true,
+                ],
+            ]);
+        }
+
         if ($invoiceAmount === 0) {
             $invoice = Invoice::create([
                 'business_id' => $user->business_id,
@@ -126,17 +189,7 @@ class BillingInvoiceController extends Controller
                 'status' => 'pending',
                 'payment_method' => 'free',
                 'note' => 'Custom pricing / sales assisted activation.',
-                'meta' => [
-                    'billing_cycle' => $billingCycle,
-                    'period_days' => $periodDays,
-                    'base_monthly_amount' => $monthlyPrice,
-                    'effective_monthly_amount' => $effectiveMonthly,
-                    'effective_yearly_amount' => $effectiveYearly,
-                    'yearly_months_charged' => $billingCycle === 'yearly' ? 10 : 1,
-                    'yearly_months_free' => $billingCycle === 'yearly' ? 2 : 0,
-                    'discount_amount' => (int) ($pricing['discount_amount'] ?? 0),
-                    'pricing_override_id' => $override?->id,
-                ],
+                'meta' => $invoiceMeta,
             ]);
 
             $approved = $this->lifecycle->approveInvoice($invoice, [
@@ -155,27 +208,6 @@ class BillingInvoiceController extends Controller
             ]);
         }
 
-        $existing = Invoice::query()
-            ->where('business_id', $user->business_id)
-            ->where('plan_id', $plan->id)
-            ->where('status', 'pending')
-            ->where('billing_cycle', $billingCycle)
-            ->latest('id')
-            ->first();
-
-        if ($existing) {
-            return response()->json([
-                'ok' => true,
-                'mode' => 'invoice',
-                'data' => $existing->load('plan:id,name,code,price,monthly_price,yearly_price,currency,seats,staff_limit'),
-                'provider' => [
-                    'default' => config('billing.providers.default', 'idbank_mock'),
-                    'mode' => config('billing.providers.mode', 'mock'),
-                    'checkout_required' => true,
-                ],
-            ]);
-        }
-
         $invoice = Invoice::create([
             'business_id' => $user->business_id,
             'plan_id' => $plan->id,
@@ -185,20 +217,7 @@ class BillingInvoiceController extends Controller
             'status' => 'pending',
             'payment_method' => $data['payment_method'] ?? null,
             'note' => $data['note'] ?? ($billingCycle === 'yearly' ? 'Տարեկան բաժանորդագրություն · 2 ամիս անվճար' : null),
-            'meta' => [
-                'billing_cycle' => $billingCycle,
-                'period_days' => $periodDays,
-                'base_monthly_amount' => $monthlyPrice,
-                'effective_monthly_amount' => $effectiveMonthly,
-                'effective_yearly_amount' => $effectiveYearly,
-                'yearly_months_charged' => $billingCycle === 'yearly' ? 10 : 1,
-                'yearly_months_free' => $billingCycle === 'yearly' ? 2 : 0,
-                'full_year_amount' => $billingCycle === 'yearly' ? ($monthlyPrice * 12) : null,
-                'discount_amount' => (int) ($pricing['discount_amount'] ?? 0),
-                'pricing_override_id' => $override?->id,
-                'override_discount_type' => $pricing['discount_type'],
-                'override_discount_value' => $pricing['discount_value'],
-            ],
+            'meta' => $invoiceMeta,
         ]);
 
         $bank = config('billing.bank');
@@ -252,8 +271,42 @@ class BillingInvoiceController extends Controller
             return response()->json(['ok' => true]);
         }
 
-        $invoice->update(['status' => 'cancelled', 'cancelled_at' => now()]);
+        $this->cancelPendingInvoice($invoice);
 
         return response()->json(['ok' => true]);
+    }
+
+    private function invoicePricingMatches(Invoice $invoice, int $amount, string $currency, array $meta): bool
+    {
+        $existingMeta = is_array($invoice->meta) ? $invoice->meta : [];
+        $keys = [
+            'billing_cycle',
+            'period_days',
+            'base_monthly_amount',
+            'effective_monthly_amount',
+            'effective_yearly_amount',
+            'discount_amount',
+            'pricing_override_id',
+            'override_discount_type',
+            'override_discount_value',
+        ];
+
+        foreach ($keys as $key) {
+            if (($existingMeta[$key] ?? null) != ($meta[$key] ?? null)) {
+                return false;
+            }
+        }
+
+        return (int) $invoice->amount === $amount && (string) $invoice->currency === $currency;
+    }
+
+    private function cancelPendingInvoice(Invoice $invoice): void
+    {
+        if ($invoice->status !== 'pending') return;
+
+        $invoice->paymentTransactions()
+            ->where('status', 'pending')
+            ->update(['status' => 'failed', 'failed_at' => now()]);
+        $invoice->update(['status' => 'cancelled', 'cancelled_at' => now()]);
     }
 }

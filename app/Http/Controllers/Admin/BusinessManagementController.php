@@ -117,6 +117,8 @@ class BusinessManagementController extends Controller
                     'discount_type' => $override->discount_type,
                     'discount_value' => $override->discount_value,
                     'billing_cycles_limit' => $override->billing_cycles_limit,
+                    'used_billing_cycles' => $override->usedBillingCycles(),
+                    'remaining_billing_cycles' => $override->remainingBillingCycles(),
                     'starts_at' => optional($override->starts_at)->toISOString(),
                     'ends_at' => optional($override->ends_at)->toISOString(),
                     'note' => $override->note,

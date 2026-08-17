@@ -5,14 +5,20 @@ namespace App\Services\Billing;
 use App\Models\Business;
 use App\Models\BusinessPricingOverride;
 use App\Models\Plan;
+use Illuminate\Support\Collection;
 
 class BusinessPricingResolver
 {
     public function activeOverride(Business $business, Plan $plan): ?BusinessPricingOverride
     {
+        return $this->activeOverridesForBusiness($business)
+            ->first(fn (BusinessPricingOverride $override) => (int) $override->plan_id === (int) $plan->id);
+    }
+
+    public function activeOverridesForBusiness(Business $business): Collection
+    {
         return BusinessPricingOverride::query()
             ->where('business_id', $business->id)
-            ->where('plan_id', $plan->id)
             ->where('is_active', true)
             ->where(function ($q) {
                 $q->whereNull('starts_at')->orWhere('starts_at', '<=', now());
@@ -20,8 +26,12 @@ class BusinessPricingResolver
             ->where(function ($q) {
                 $q->whereNull('ends_at')->orWhere('ends_at', '>=', now());
             })
+            ->with('plan')
             ->latest('id')
-            ->first();
+            ->get()
+            ->filter(fn (BusinessPricingOverride $override) => $override->isCurrentlyActive())
+            ->unique('plan_id')
+            ->values();
     }
 
     public function resolve(Business $business, Plan $plan, string $billingCycle = 'monthly'): array
@@ -36,41 +46,44 @@ class BusinessPricingResolver
 
         $effectiveMonthly = $baseMonthly;
         $effectiveYearly = $baseYearly;
-        $discountAmount = 0;
+        $monthlyDiscountAmount = 0;
+        $yearlyDiscountAmount = 0;
         $discountType = null;
         $discountValue = null;
 
         if ($override) {
             if ($override->custom_monthly_price !== null) {
                 $effectiveMonthly = (int) $override->custom_monthly_price;
+
+                if ($override->custom_yearly_price === null) {
+                    $effectiveYearly = $effectiveMonthly * 10;
+                }
             }
             if ($override->custom_yearly_price !== null) {
                 $effectiveYearly = (int) $override->custom_yearly_price;
             }
-
-            $targetAmount = $billingCycle === 'yearly' ? $effectiveYearly : $effectiveMonthly;
 
             if (in_array($override->discount_type, ['percent', 'fixed'], true) && $override->discount_value !== null) {
                 $discountType = $override->discount_type;
                 $discountValue = (float) $override->discount_value;
 
                 if ($override->discount_type === 'percent') {
-                    $discountAmount = (int) round($targetAmount * ($discountValue / 100));
+                    $monthlyDiscountAmount = (int) round($effectiveMonthly * ($discountValue / 100));
+                    $yearlyDiscountAmount = (int) round($effectiveYearly * ($discountValue / 100));
                 } else {
-                    $discountAmount = (int) round($discountValue);
+                    $monthlyDiscountAmount = (int) round($discountValue);
+                    $yearlyDiscountAmount = (int) round($discountValue);
                 }
 
-                $discountAmount = max(0, min($discountAmount, $targetAmount));
-
-                if ($billingCycle === 'yearly') {
-                    $effectiveYearly = max(0, $targetAmount - $discountAmount);
-                } else {
-                    $effectiveMonthly = max(0, $targetAmount - $discountAmount);
-                }
+                $monthlyDiscountAmount = max(0, min($monthlyDiscountAmount, $effectiveMonthly));
+                $yearlyDiscountAmount = max(0, min($yearlyDiscountAmount, $effectiveYearly));
+                $effectiveMonthly = max(0, $effectiveMonthly - $monthlyDiscountAmount);
+                $effectiveYearly = max(0, $effectiveYearly - $yearlyDiscountAmount);
             }
         }
 
         $effectiveAmount = $billingCycle === 'yearly' ? $effectiveYearly : $effectiveMonthly;
+        $discountAmount = $billingCycle === 'yearly' ? $yearlyDiscountAmount : $monthlyDiscountAmount;
 
         return [
             'billing_cycle' => $billingCycle,
@@ -82,6 +95,8 @@ class BusinessPricingResolver
             'effective_yearly_price' => $effectiveYearly,
             'effective_amount' => $effectiveAmount,
             'discount_amount' => $discountAmount,
+            'monthly_discount_amount' => $monthlyDiscountAmount,
+            'yearly_discount_amount' => $yearlyDiscountAmount,
             'discount_type' => $discountType,
             'discount_value' => $discountValue,
             'override' => $override,
