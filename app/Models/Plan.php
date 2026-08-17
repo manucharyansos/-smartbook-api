@@ -105,6 +105,18 @@ class Plan extends Model
         return $monthly > 0 ? $monthly * 10 : 0;
     }
 
+    public function usesCustomPricing(): bool
+    {
+        $features = is_array($this->features) ? $this->features : [];
+
+        return $this->code === 'custom' || (bool) ($features['custom_pricing'] ?? false);
+    }
+
+    public function isSelfServe(): bool
+    {
+        return !$this->usesCustomPricing() && $this->monthlyPrice() > 0;
+    }
+
     /**
      * Legacy helper kept so existing billing/admin code does not break.
      * Pricing is now unified and independent of business type.

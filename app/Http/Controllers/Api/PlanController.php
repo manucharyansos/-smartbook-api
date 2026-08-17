@@ -19,7 +19,6 @@ class PlanController extends Controller
         $plans = Plan::query()
             ->where('is_active', true)
             ->where('is_visible', true)
-            ->where('code', '!=', 'custom')
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get()
@@ -28,6 +27,8 @@ class PlanController extends Controller
             ->map(function (Plan $plan) {
                 $monthlyPrice = $plan->monthlyPrice();
                 $yearlyPrice = $plan->yearlyPrice();
+                $features = $plan->getFeaturesList();
+                $isCustom = $plan->usesCustomPricing();
 
                 return [
                     'id' => $plan->id,
@@ -39,10 +40,12 @@ class PlanController extends Controller
                     'monthly_price' => $monthlyPrice,
                     'currency' => $plan->currency,
                     'staff_limit' => $plan->staffLimit(),
-                    'services_limit' => $plan->features['services_limit'] ?? null,
+                    'services_limit' => $features['services_limit'] ?? null,
                     'duration_days' => $plan->duration_days,
                     'locations' => $plan->locations,
-                    'features' => $plan->getFeaturesList(),
+                    'features' => $features,
+                    'is_custom' => $isCustom,
+                    'self_serve' => $plan->isSelfServe(),
                     'period' => 'ամիս',
                     'pricing_model' => [
                         'staff_based' => true,
@@ -50,7 +53,7 @@ class PlanController extends Controller
                         'managers_unlimited' => true,
                     ],
                     'yearly_offer' => [
-                        'enabled' => $yearlyPrice > 0,
+                        'enabled' => !$isCustom && $yearlyPrice > 0,
                         'price' => $yearlyPrice,
                         'months_charged' => 10,
                         'months_free' => 2,

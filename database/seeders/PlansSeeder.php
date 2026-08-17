@@ -23,6 +23,7 @@ class PlansSeeder extends Seeder
                 'features' => [
                     'staff_limit' => 1,
                     'services_limit' => 10,
+                    'sms_reminders' => 'unlimited',
                     'priority_support' => false,
                     'custom_pricing' => false,
                     'partner_terms' => false,
@@ -41,6 +42,7 @@ class PlansSeeder extends Seeder
                 'features' => [
                     'staff_limit' => 5,
                     'services_limit' => 30,
+                    'sms_reminders' => 'unlimited',
                     'priority_support' => false,
                     'custom_pricing' => false,
                     'partner_terms' => false,
@@ -59,6 +61,7 @@ class PlansSeeder extends Seeder
                 'features' => [
                     'staff_limit' => 15,
                     'services_limit' => 100,
+                    'sms_reminders' => 'unlimited',
                     'priority_support' => true,
                     'custom_pricing' => false,
                     'partner_terms' => false,
@@ -78,6 +81,7 @@ class PlansSeeder extends Seeder
                 'features' => [
                     'staff_limit' => 999,
                     'services_limit' => 999,
+                    'sms_reminders' => 'unlimited',
                     'priority_support' => true,
                     'custom_pricing' => true,
                     'partner_terms' => true,
@@ -94,7 +98,7 @@ class PlansSeeder extends Seeder
                 [
                     'name' => $plan['name'],
                     'code' => $plan['code'],
-                    'version' => 2,
+                    'version' => 3,
                     'business_type' => null,
                     'allowed_business_types' => ['beauty', 'dental', 'services', 'healthcare'],
                     'description' => $plan['description'],

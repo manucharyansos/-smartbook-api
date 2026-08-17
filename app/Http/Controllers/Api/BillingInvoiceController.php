@@ -65,6 +65,57 @@ class BillingInvoiceController extends Controller
         $effectiveYearly = (int) $pricing['effective_yearly_price'];
         $override = $pricing['override'];
 
+        if (!$plan->is_visible && !$override) {
+            abort(404);
+        }
+
+        if ($plan->usesCustomPricing() && (!$override || $invoiceAmount <= 0)) {
+            return response()->json([
+                'message' => 'Այս պլանի համար անհրաժեշտ է գործող անհատական առաջարկ։',
+                'code' => 'custom_offer_required',
+            ], 422);
+        }
+
+        $staffLimit = $plan->staffLimit();
+        $servicesLimit = $plan->getFeaturesList()['services_limit'] ?? null;
+        $locationsLimit = max(1, (int) ($plan->locations ?? 1));
+        $activeStaff = $business->activeSeatCount();
+        $activeServices = $business->activeServiceCount();
+        $locationsCount = $business->locationCount();
+
+        $limitErrors = [];
+        if ($staffLimit > 0 && $activeStaff > $staffLimit) {
+            $limitErrors[] = 'staff';
+        }
+        if ($servicesLimit !== null && $activeServices > (int) $servicesLimit) {
+            $limitErrors[] = 'services';
+        }
+        if ($locationsCount > $locationsLimit) {
+            $limitErrors[] = 'locations';
+        }
+
+        if ($limitErrors !== []) {
+            return response()->json([
+                'message' => 'Ընտրված պլանի սահմանաչափերը փոքր են բիզնեսի ընթացիկ օգտագործումից։',
+                'code' => 'plan_limits_exceeded',
+                'data' => [
+                    'exceeded' => $limitErrors,
+                    'selected_plan' => [
+                        'code' => $plan->code,
+                        'name' => $plan->name,
+                        'staff_limit' => $staffLimit,
+                        'services_limit' => $servicesLimit,
+                        'locations_limit' => $locationsLimit,
+                    ],
+                    'usage' => [
+                        'active_staff' => $activeStaff,
+                        'active_services' => $activeServices,
+                        'locations' => $locationsCount,
+                    ],
+                ],
+            ], 409);
+        }
+
         if ($invoiceAmount === 0) {
             $invoice = Invoice::create([
                 'business_id' => $user->business_id,
@@ -123,30 +174,6 @@ class BillingInvoiceController extends Controller
                     'checkout_required' => true,
                 ],
             ]);
-        }
-
-        $limit = (int) $plan->staffLimit();
-        $activeCount = $business->activeSeatCount();
-
-        if ($activeCount > $limit) {
-            $users = $business->seatUsers()
-                ->orderByRaw("FIELD(role,'owner','manager','staff')")
-                ->orderBy('id')
-                ->get(['id','name','email','role','is_active']);
-
-            return response()->json([
-                'message' => 'Active staff count exceeds selected plan. Deactivate staff or choose a higher plan.',
-                'data' => [
-                    'selected_plan' => [
-                        'code' => $plan->code,
-                        'name' => $plan->name,
-                        'staff_limit' => $plan->staffLimit(),
-                    ],
-                    'active_staff_count' => $activeCount,
-                    'staff_limit' => $limit,
-                    'users' => $users,
-                ]
-            ], 409);
         }
 
         $invoice = Invoice::create([

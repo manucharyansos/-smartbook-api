@@ -41,6 +41,11 @@ class PlanController extends Controller
             'duration_days' => 'required|integer|min:1',
             'locations' => 'nullable|integer|min:1',
             'features' => 'nullable|array',
+            'features.staff_limit' => 'nullable|integer|min:1',
+            'features.services_limit' => 'nullable|integer|min:1',
+            'features.priority_support' => 'nullable|boolean',
+            'features.custom_pricing' => 'nullable|boolean',
+            'features.partner_terms' => 'nullable|boolean',
             'services_limit' => 'nullable|integer|min:1',
             'is_active' => 'sometimes|boolean',
             'is_visible' => 'sometimes|boolean',
@@ -81,6 +86,11 @@ class PlanController extends Controller
             'duration_days' => 'sometimes|integer|min:1',
             'locations' => 'nullable|integer|min:1',
             'features' => 'nullable|array',
+            'features.staff_limit' => 'nullable|integer|min:1',
+            'features.services_limit' => 'nullable|integer|min:1',
+            'features.priority_support' => 'nullable|boolean',
+            'features.custom_pricing' => 'nullable|boolean',
+            'features.partner_terms' => 'nullable|boolean',
             'services_limit' => 'nullable|integer|min:1',
             'is_active' => 'sometimes|boolean',
             'is_visible' => 'sometimes|boolean',
@@ -88,6 +98,7 @@ class PlanController extends Controller
         ]);
 
         $validated = $this->normalizePlanPayload($validated, $plan);
+        $validated['version'] = max(1, (int) ($plan->version ?? 1)) + 1;
 
         $plan->update($validated);
 
@@ -120,11 +131,13 @@ class PlanController extends Controller
 
         if ($servicesLimit !== null && $servicesLimit !== '') {
             $features['services_limit'] = max(1, (int) $servicesLimit);
-            $validated['services_limit'] = $features['services_limit'];
         } else {
             unset($features['services_limit']);
-            $validated['services_limit'] = null;
         }
+
+        // services_limit lives in the versioned feature snapshot, not in a
+        // standalone plans table column.
+        unset($validated['services_limit']);
 
         $validated['features'] = $features;
 
@@ -133,6 +146,14 @@ class PlanController extends Controller
             ?? $plan?->locations
             ?? 1
         ));
+
+        if (array_key_exists('business_type', $validated)) {
+            $validated['allowed_business_types'] = match ($validated['business_type']) {
+                'beauty', 'salon' => ['beauty'],
+                'dental', 'clinic' => ['dental'],
+                default => ['beauty', 'dental'],
+            };
+        }
 
         $monthly = $validated['monthly_price']
             ?? $validated['price']
