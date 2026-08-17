@@ -255,6 +255,22 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'role:owner,manager'])->gr
 });
 
 /**
+ * ✅ BILLING RECOVERY (must work even when subscription is inactive)
+ */
+Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'role:owner'])->group(function () {
+    Route::get('/billing/me', [BillingMeController::class, 'show'])->name('billing.me');
+    Route::get('/billing/invoices', [BillingInvoiceController::class, 'index'])->name('billing.invoices.index');
+    Route::post('/billing/upgrade-request', [BillingInvoiceController::class, 'requestUpgrade'])->name('billing.upgrade.request');
+    Route::post('/billing/invoices/{invoice}/cancel', [BillingInvoiceController::class, 'cancel'])->name('billing.invoices.cancel');
+    Route::post('/billing/checkout-session', [BillingPaymentController::class, 'createCheckout'])->name('billing.checkout');
+    Route::get('/billing/invoices/{invoice}/payment-status', [BillingPaymentController::class, 'status'])->name('billing.payment.status');
+    Route::post('/billing/transactions/{transaction}/mock-success', [BillingWebhookController::class, 'mockSuccess'])->name('billing.mock.success');
+    Route::post('/billing/pause', [BillingSubscriptionController::class, 'pause'])->name('billing.pause');
+    Route::post('/billing/resume', [BillingSubscriptionController::class, 'resume'])->name('billing.resume');
+    Route::post('/billing/cancel-subscription', [BillingSubscriptionController::class, 'cancel'])->name('billing.cancel');
+});
+
+/**
  * ✅ MAIN APP (only AFTER onboarding is completed + business is billable)
  */
 Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensure.billable'])->group(function () {
@@ -313,20 +329,6 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
     Route::post('/bookings/multi', [BookingController::class, 'storeMulti'])->name('bookings.storeMulti');
     Route::post('/bookings/lines', [BookingController::class, 'storeLines'])->name('bookings.storeLines');
     /*
-    |--------------------------------------------------------------------------
-    | Billing
-    |--------------------------------------------------------------------------
-    */
-   Route::middleware(['auth:sanctum','ensure.business','ensure.onboarded','role:owner'])->group(function () {
-    Route::get('/billing/me', [BillingMeController::class, 'show'])->name('billing.me');
-    Route::get('/billing/invoices', [BillingInvoiceController::class, 'index'])->name('billing.invoices.index');
-    Route::post('/billing/upgrade-request', [BillingInvoiceController::class, 'requestUpgrade'])->name('billing.upgrade.request');
-    Route::post('/billing/invoices/{invoice}/cancel', [BillingInvoiceController::class, 'cancel'])->name('billing.invoices.cancel');
-    Route::post('/billing/checkout-session', [BillingPaymentController::class, 'createCheckout'])->name('billing.checkout');
-    Route::get('/billing/invoices/{invoice}/payment-status', [BillingPaymentController::class, 'status'])->name('billing.payment.status');
-    Route::post('/billing/transactions/{transaction}/mock-success', [BillingWebhookController::class, 'mockSuccess'])->name('billing.mock.success');
-});
-/*
     |--------------------------------------------------------------------------
     | Calendar
     |--------------------------------------------------------------------------
@@ -482,17 +484,6 @@ Route::prefix('admin')->group(function () {
     Route::post('/login', [AdminAuthController::class, 'login']);
 });
 
-
-/*
-|--------------------------------------------------------------------------
-| ✅ Billing management (must work even when subscription is inactive)
-|--------------------------------------------------------------------------
-*/
-Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'role:owner'])->group(function () {
-    Route::post('/billing/pause', [BillingSubscriptionController::class, 'pause'])->name('billing.pause');
-    Route::post('/billing/resume', [BillingSubscriptionController::class, 'resume'])->name('billing.resume');
-    Route::post('/billing/cancel-subscription', [BillingSubscriptionController::class, 'cancel'])->name('billing.cancel');
-});
 
 /*
 |--------------------------------------------------------------------------

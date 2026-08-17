@@ -30,13 +30,34 @@ return new class extends Migration {
         // plan_version := plans.version (or 1)
         // seats_limit_snapshot := plans.staff_limit (or plans.seats)
         // features_snapshot := plans.features
-        DB::statement(
-            "UPDATE subscriptions s\n".
-            "JOIN plans p ON p.id = s.plan_id\n".
-            "SET s.plan_version = COALESCE(s.plan_version, p.version, 1),\n".
-            "    s.seats_limit_snapshot = COALESCE(s.seats_limit_snapshot, p.staff_limit, p.seats),\n".
-            "    s.features_snapshot = COALESCE(s.features_snapshot, p.features)"
-        );
+        DB::table('subscriptions')
+            ->orderBy('id')
+            ->chunkById(200, function ($subscriptions) {
+                $plans = DB::table('plans')
+                    ->whereIn('id', $subscriptions->pluck('plan_id')->filter()->unique()->values())
+                    ->get()
+                    ->keyBy('id');
+
+                foreach ($subscriptions as $subscription) {
+                    $plan = $plans->get($subscription->plan_id);
+                    if (!$plan) continue;
+
+                    $updates = [];
+                    if ($subscription->plan_version === null) {
+                        $updates['plan_version'] = $plan->version ?? 1;
+                    }
+                    if ($subscription->seats_limit_snapshot === null) {
+                        $updates['seats_limit_snapshot'] = $plan->staff_limit ?? $plan->seats;
+                    }
+                    if ($subscription->features_snapshot === null) {
+                        $updates['features_snapshot'] = $plan->features;
+                    }
+
+                    if ($updates !== []) {
+                        DB::table('subscriptions')->where('id', $subscription->id)->update($updates);
+                    }
+                }
+            });
 
         Schema::table('subscriptions', function (Blueprint $table) {
             $table->index(['business_id', 'status'], 'subs_business_status');

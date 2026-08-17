@@ -12,6 +12,8 @@ This project now supports an **IdBank-ready mock payment flow**:
 
 - `BILLING_DEFAULT_PROVIDER=idbank`
 - `BILLING_PROVIDER_MODE=live`
+- `BILLING_ALLOW_MOCK_PAYMENTS=false`
+- `IDBANK_LIVE_ENABLED=true` (only after the official checkout payload and callback format are verified)
 - `IDBANK_MERCHANT_ID=`
 - `IDBANK_TERMINAL_ID=`
 - `IDBANK_PUBLIC_KEY=`
@@ -23,13 +25,20 @@ This project now supports an **IdBank-ready mock payment flow**:
 ## What is still mocked
 
 - Checkout URL creation
-- Signature verification
 - Real provider payment ID / settlement payload
 - Refunds / chargebacks / retry webhooks
 
-## Recommended next backend steps
+## Production safety already enforced
 
-- Add webhook signature verification using `IDBANK_WEBHOOK_SECRET`
+- Production defaults do not expose mock checkout.
+- The client cannot select a provider different from the server configuration.
+- Mock callbacks return 404 when mock payments are disabled.
+- Live callbacks require an HMAC signature from `X-IdBank-Signature` using `IDBANK_WEBHOOK_SECRET`.
+- `IDBANK_LIVE_ENABLED` remains false until the official IDBank field/signature mapping is confirmed.
+
+## Remaining provider-specific work
+
+- Align the checkout payload and HMAC input/header with the official IDBank contract before enabling live mode.
 - Persist raw provider order/request IDs from the real API response
 - Add `failed`, `expired`, `refunded`, and `chargeback` lifecycle handlers
 - Add scheduled dunning / retry logic for failed renewals

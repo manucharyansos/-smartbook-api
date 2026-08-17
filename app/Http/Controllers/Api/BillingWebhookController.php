@@ -17,8 +17,37 @@ class BillingWebhookController extends Controller
 
     public function idbank(Request $request)
     {
+        if (!config('billing.providers.idbank.live_enabled', false)) {
+            return response()->json([
+                'message' => 'IDBank live webhook-ը միացված չէ։',
+                'code' => 'live_payments_disabled',
+            ], 503);
+        }
+
         $payload = $request->all();
         $signature = (string) $request->header('X-IdBank-Signature', '');
+        $webhookSecret = (string) config('billing.providers.idbank.webhook_secret', '');
+        $signatureAlgorithm = (string) config('billing.providers.idbank.signature_algorithm', 'sha256');
+
+        if ($webhookSecret === '' || $signature === '' || !in_array($signatureAlgorithm, hash_hmac_algos(), true)) {
+            return response()->json([
+                'message' => 'Վճարման callback-ը հաստատված չէ։',
+                'code' => 'invalid_webhook_signature',
+            ], 401);
+        }
+
+        $providedSignature = str_starts_with($signature, $signatureAlgorithm . '=')
+            ? substr($signature, strlen($signatureAlgorithm) + 1)
+            : $signature;
+        $expectedSignature = hash_hmac($signatureAlgorithm, $request->getContent(), $webhookSecret);
+
+        if (!hash_equals($expectedSignature, $providedSignature)) {
+            return response()->json([
+                'message' => 'Վճարման callback-ի ստորագրությունը սխալ է։',
+                'code' => 'invalid_webhook_signature',
+            ], 401);
+        }
+
         $reference = (string) ($payload['transaction_reference'] ?? $payload['reference'] ?? '');
         $eventType = (string) ($payload['event'] ?? $payload['status'] ?? 'unknown');
 
@@ -32,6 +61,7 @@ class BillingWebhookController extends Controller
         ]);
 
         $transaction = PaymentTransaction::query()
+            ->where('provider', 'idbank')
             ->where('provider_transaction_id', $reference)
             ->first();
 
@@ -42,7 +72,7 @@ class BillingWebhookController extends Controller
 
         $this->applyPaymentResult(
             $transaction,
-            (string) ($payload['status'] ?? 'paid'),
+            (string) ($payload['status'] ?? 'unknown'),
             [
                 'provider' => 'idbank',
                 'provider_payment_id' => $payload['payment_id'] ?? null,
@@ -58,12 +88,15 @@ class BillingWebhookController extends Controller
 
     public function hostedMockComplete(Request $request)
     {
+        $this->ensureMockPaymentsAreAllowed();
+
         $data = $request->validate([
             'reference' => ['required', 'string'],
             'status' => ['required', 'string', 'in:success,failed,cancelled'],
         ]);
 
         $transaction = PaymentTransaction::query()
+            ->where('provider', 'idbank_mock')
             ->where('provider_transaction_id', $data['reference'])
             ->firstOrFail();
 
@@ -102,8 +135,11 @@ class BillingWebhookController extends Controller
 
     public function mockSuccess(Request $request, PaymentTransaction $transaction)
     {
+        $this->ensureMockPaymentsAreAllowed();
+
         $user = $request->user();
         abort_unless($transaction->business_id === $user->business_id, 404);
+        abort_unless($transaction->provider === 'idbank_mock', 404);
 
         $event = PaymentWebhookEvent::create([
             'provider' => 'idbank_mock',
@@ -142,8 +178,16 @@ class BillingWebhookController extends Controller
     private function applyPaymentResult(PaymentTransaction $transaction, string $status, array $meta, PaymentWebhookEvent $event): void
     {
         DB::transaction(function () use ($transaction, $status, $meta, $event) {
+            $transaction = PaymentTransaction::query()->lockForUpdate()->findOrFail($transaction->id);
+
+            if ($transaction->status === 'paid') {
+                $event->update(['status' => 'processed', 'processed_at' => now()]);
+                return;
+            }
+
             $normalized = strtolower($status);
             $successStates = ['paid', 'success', 'approved'];
+            $invoice = $transaction->invoice()->lockForUpdate()->first();
 
             if (in_array($normalized, $successStates, true)) {
                 $transaction->update([
@@ -154,7 +198,17 @@ class BillingWebhookController extends Controller
                     'failed_at' => null,
                 ]);
 
-                $this->lifecycle->approveInvoice($transaction->invoice, [
+                if (!$invoice || !in_array($invoice->status, ['pending', 'approved', 'paid'], true)) {
+                    $event->update(['status' => 'ignored', 'processed_at' => now()]);
+                    return;
+                }
+
+                if (in_array($invoice->status, ['approved', 'paid'], true)) {
+                    $event->update(['status' => 'processed', 'processed_at' => now()]);
+                    return;
+                }
+
+                $this->lifecycle->approveInvoice($invoice, [
                     'provider' => $meta['provider'] ?? $transaction->provider,
                     'provider_subscription_id' => $meta['provider_subscription_id'] ?? '',
                     'note' => $meta['note'] ?? null,
@@ -172,5 +226,10 @@ class BillingWebhookController extends Controller
 
             $event->update(['status' => $normalized === 'cancelled' ? 'cancelled' : 'failed', 'processed_at' => now()]);
         });
+    }
+
+    private function ensureMockPaymentsAreAllowed(): void
+    {
+        abort_unless(config('billing.allow_mock_payments', false), 404);
     }
 }

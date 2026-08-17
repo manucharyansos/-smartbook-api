@@ -150,6 +150,8 @@ class Plan extends Model
             'source_tracking' => true,
             'analytics' => true,
             'tasks' => true,
+            'blocks' => true,
+            'rooms' => true,
             'gift_cards' => true,
             'loyalty' => true,
             'social_buttons' => true,

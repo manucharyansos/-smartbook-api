@@ -17,22 +17,24 @@ class BillingLifecycleService
                 return $invoice;
             }
 
+            if ($invoice->status !== 'pending') {
+                throw new \DomainException('Only pending invoices can be approved.');
+            }
+
             $plan = $invoice->plan;
             $business = $invoice->business;
             $invoiceMeta = is_array($invoice->meta) ? $invoice->meta : [];
             $periodDays = (int) ($invoiceMeta['period_days'] ?? ($plan?->duration_days ?: 30));
             $billingCycle = (string) ($invoice->billing_cycle ?: ($invoiceMeta['billing_cycle'] ?? 'monthly'));
 
-            $sub = Subscription::firstOrCreate(
-                ['business_id' => $invoice->business_id],
-                [
-                    'plan_id' => $invoice->plan_id,
-                    'status' => Subscription::STATUS_ACTIVE,
-                    'billing_cycle' => $billingCycle,
-                    'current_period_starts_at' => now(),
-                    'current_period_ends_at' => now()->addDays($periodDays),
-                ]
-            );
+            $now = now();
+            $sub = Subscription::firstOrNew(['business_id' => $invoice->business_id]);
+            $hasFuturePeriod = $sub->exists
+                && $sub->current_period_ends_at
+                && $now->lt($sub->current_period_ends_at);
+            $periodBase = $hasFuturePeriod
+                ? $sub->current_period_ends_at->copy()
+                : $now->copy();
 
             if ($plan) {
                 $sub->applyPlanSnapshot($plan);
@@ -50,12 +52,10 @@ class BillingLifecycleService
                 'provider_subscription_id' => $paymentMeta['provider_subscription_id'] ?? $sub->provider_subscription_id,
             ]);
 
-            if (!$sub->current_period_starts_at) {
-                $sub->current_period_starts_at = now();
+            if (!$hasFuturePeriod || !$sub->current_period_starts_at) {
+                $sub->current_period_starts_at = $now;
             }
-            if (!$sub->current_period_ends_at || now()->gte($sub->current_period_ends_at)) {
-                $sub->current_period_ends_at = now()->addDays($periodDays);
-            }
+            $sub->current_period_ends_at = $periodBase->addDays($periodDays);
 
             $sub->save();
 

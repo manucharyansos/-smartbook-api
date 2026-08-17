@@ -32,18 +32,20 @@ class BillingMeController extends Controller
         }
 
         $isActive = $sub && $sub->isActive();
-        $isSuspended = $business->billing_status === 'suspended';
+        $isBusinessSuspended = $business->status === 'suspended';
+        $isBillingSuspended = $business->billing_status === 'suspended';
 
         $reason = null;
-        if ($isSuspended) $reason = 'suspended';
+        if ($isBusinessSuspended) $reason = 'business_suspended';
+        elseif ($isBillingSuspended) $reason = 'billing_suspended';
         elseif (!$sub) $reason = 'no_subscription';
         elseif (!$isActive) $reason = 'subscription_inactive';
 
         $nextAction = null;
-        if ($reason === 'subscription_inactive' || $reason === 'no_subscription') {
+        if (in_array($reason, ['subscription_inactive', 'no_subscription', 'billing_suspended'], true)) {
             $nextAction = 'create_invoice';
         }
-        if ($reason === 'suspended') {
+        if ($reason === 'business_suspended') {
             $nextAction = 'contact_support';
         }
 
@@ -67,6 +69,8 @@ class BillingMeController extends Controller
                     'discount_type' => $override->discount_type,
                     'discount_value' => $override->discount_value,
                     'billing_cycles_limit' => $override->billing_cycles_limit,
+                    'used_billing_cycles' => $override->usedBillingCycles(),
+                    'remaining_billing_cycles' => $override->remainingBillingCycles(),
                     'starts_at' => optional($override->starts_at)->toISOString(),
                     'ends_at' => optional($override->ends_at)->toISOString(),
                     'note' => $override->note,
@@ -98,6 +102,8 @@ class BillingMeController extends Controller
                     'discount_type' => $resolved['discount_type'],
                     'discount_value' => $resolved['discount_value'],
                     'billing_cycles_limit' => $override->billing_cycles_limit,
+                    'used_billing_cycles' => $override->usedBillingCycles(),
+                    'remaining_billing_cycles' => $override->remainingBillingCycles(),
                     'starts_at' => optional($override->starts_at)->toISOString(),
                     'ends_at' => optional($override->ends_at)->toISOString(),
                     'note' => $override->note,
@@ -105,9 +111,22 @@ class BillingMeController extends Controller
             })
             ->values();
 
+        $defaultProvider = (string) config('billing.providers.default', 'idbank_mock');
+        $idbankCredentials = [
+            config('billing.providers.idbank.merchant_id'),
+            config('billing.providers.idbank.terminal_id'),
+            config('billing.providers.idbank.secret'),
+            config('billing.providers.idbank.webhook_secret'),
+        ];
+        $liveReady = $defaultProvider === 'idbank'
+            && (bool) config('billing.providers.idbank.live_enabled', false)
+            && collect($idbankCredentials)->every(
+                fn ($value) => filled($value) && $value !== 'CHANGE_ME'
+            );
+
         return response()->json([
             'data' => [
-                'is_billable' => (!$isSuspended) && $isActive,
+                'is_billable' => (!$isBusinessSuspended) && (!$isBillingSuspended) && $isActive,
                 'reason' => $reason,
                 'next_action' => $nextAction,
                 'business' => [
@@ -133,14 +152,14 @@ class BillingMeController extends Controller
                     'locations_limit' => $business->locationLimit(),
                 ],
                 'payment_provider' => [
-                    'default' => config('billing.providers.default', 'idbank_mock'),
-                    'mode' => config('billing.providers.default', 'idbank_mock') === 'idbank' ? 'live' : 'mock',
-                    'live_ready' => config('billing.providers.default', 'idbank_mock') === 'idbank',
+                    'default' => $defaultProvider,
+                    'mode' => $defaultProvider === 'idbank' ? 'live' : 'mock',
+                    'live_ready' => $liveReady,
                 ],
                 'pricing' => $pricing,
                 'individual_offers' => $individualOffers,
                 'subscription' => $sub ? [
-                    'status' => $sub->status,
+                    'status' => $sub->computedStatus(),
                     'trial_ends_at' => $sub->trial_ends_at,
                     'current_period_ends_at' => $sub->current_period_ends_at,
                     'billing_cycle' => $sub->billing_cycle ?? 'monthly',
