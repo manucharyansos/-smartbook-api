@@ -309,6 +309,7 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
     */
     Route::middleware('role:owner,manager')->group(function () {
         Route::get('/services', [ServiceController::class, 'index'])->name('services.index');
+        Route::get('/services/{service}', [ServiceController::class, 'show'])->name('services.show');
         Route::put('/services/{service}', [ServiceController::class, 'update'])->name('services.update');
         Route::delete('/services/{service}', [ServiceController::class, 'destroy'])->name('services.destroy');
     });

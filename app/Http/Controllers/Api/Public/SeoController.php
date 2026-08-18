@@ -18,7 +18,7 @@ class SeoController extends Controller
         $base = $this->frontendBaseUrl();
         $url = $base . ($path === '/' ? '' : $path);
 
-        if (preg_match('#^/(businesses|book)/([^/?#]+)#', $path, $matches)) {
+        if (preg_match('~^/(businesses|book)/([^/?#]+)~', $path, $matches)) {
             $mode = $matches[1];
             $slug = urldecode($matches[2]);
             $business = $this->activeBusiness($slug);

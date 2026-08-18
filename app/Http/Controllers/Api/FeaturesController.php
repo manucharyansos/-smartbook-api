@@ -19,7 +19,9 @@ class FeaturesController extends Controller
         $actor = $request->user();
         if (!$actor) abort(401);
 
-        $business = $actor->business;
+        // Fetch a fresh business instance. This avoids reporting stale billing
+        // state after an invoice activates the subscription in the same worker.
+        $business = $actor->business()->with('subscription.plan')->first();
         $sub = $business?->subscription;
 
         $computed = $sub?->computedStatus();

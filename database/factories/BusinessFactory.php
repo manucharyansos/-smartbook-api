@@ -4,6 +4,8 @@
 namespace Database\Factories;
 
 use App\Models\Business;
+use App\Models\Plan;
+use App\Models\Subscription;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -59,6 +61,43 @@ class BusinessFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'is_onboarding_completed' => true,
         ]);
+    }
+
+    public function billable(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_onboarding_completed' => true,
+            'status' => 'active',
+            'billing_status' => 'active',
+        ])->afterCreating(function (Business $business) {
+            $plan = Plan::query()->firstOrCreate([
+                'code' => 'factory-test',
+            ], [
+                'name' => 'Factory Test',
+                'version' => 1,
+                'allowed_business_types' => ['beauty', 'dental'],
+                'price' => 1000,
+                'monthly_price' => 1000,
+                'yearly_price' => 10000,
+                'currency' => 'AMD',
+                'seats' => 10,
+                'staff_limit' => 10,
+                'duration_days' => 30,
+                'locations' => 1,
+                'features' => ['services_limit' => 20],
+                'is_active' => true,
+                'is_visible' => true,
+            ]);
+
+            $subscription = new Subscription([
+                'business_id' => $business->id,
+                'status' => Subscription::STATUS_ACTIVE,
+                'current_period_starts_at' => now(),
+                'current_period_ends_at' => now()->addMonth(),
+            ]);
+            $subscription->applyPlanSnapshot($plan);
+            $subscription->save();
+        });
     }
 
     // State for suspended business

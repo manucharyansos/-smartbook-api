@@ -7,7 +7,7 @@ use App\Models\User;
 use Laravel\Sanctum\Sanctum;
 
 it('owner can list only own business services (tenant isolation)', function () {
-    $businessA = Business::factory()->create(); // Փոխել Salon-ից Business
+    $businessA = Business::factory()->billable()->create(); // Փոխել Salon-ից Business
     $businessB = Business::factory()->create();
 
     $ownerA = User::factory()->create([
@@ -73,7 +73,7 @@ it('owner can create service', function () {
 });
 
 it('owner cannot access other business service via show', function () {
-    $businessA = Business::factory()->create(); // Փոխել Salon-ից Business
+    $businessA = Business::factory()->billable()->create(); // Փոխել Salon-ից Business
     $businessB = Business::factory()->create();
 
     $ownerA = User::factory()->create([
