@@ -88,6 +88,36 @@ class PublicBookingController extends Controller
         return $this->hasColumn('businesses', $field) ? ($business->{$field} ?? $fallback) : $fallback;
     }
 
+    private function applyPublicBusinessExclusions($query)
+    {
+        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
+        if ($excluded) {
+            $query->whereNotIn('slug', $excluded);
+        }
+
+        return $query;
+    }
+
+    private function publicBusinessQuery(string $slug)
+    {
+        $query = Business::query()->where('slug', $slug);
+        $this->applyPublicBusinessExclusions($query);
+
+        if ($this->hasColumn('businesses', 'status')) {
+            $query->where('status', 'active');
+        }
+        if ($this->hasColumn('businesses', 'is_onboarding_completed')) {
+            $query->where('is_onboarding_completed', true);
+        }
+        if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
+            $query->where('is_public_profile_enabled', true);
+        } elseif ($this->hasColumn('businesses', 'is_public')) {
+            $query->where('is_public', true);
+        }
+
+        return $query;
+    }
+
     public function index(Request $request)
     {
         $data = $request->validate([
@@ -128,6 +158,7 @@ class PublicBookingController extends Controller
             $radius = (float) ($data['radius'] ?? 10);
 
             $query = Business::query();
+            $this->applyPublicBusinessExclusions($query);
             if ($hasLocations) {
                 $query->with('locations');
             }
@@ -142,17 +173,12 @@ class PublicBookingController extends Controller
                 $query->where('is_onboarding_completed', true);
             }
             if ($this->hasColumn('businesses', 'is_marketplace_visible')) {
-                $query->where(function ($visibility) {
-                    $visibility->where('is_marketplace_visible', true);
-                    if ($this->hasColumn('businesses', 'is_public')) {
-                        $visibility->orWhere('is_public', true);
-                    }
-                    if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
-                        $visibility->orWhere('is_public_profile_enabled', true);
-                    }
-                });
+                $query->where('is_marketplace_visible', true);
             } elseif ($this->hasColumn('businesses', 'is_public')) {
                 $query->where('is_public', true);
+            }
+            if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
+                $query->where('is_public_profile_enabled', true);
             }
             if ($vertical && $this->hasColumn('businesses', 'vertical')) {
                 $query->where('vertical', $vertical);
@@ -289,7 +315,9 @@ class PublicBookingController extends Controller
             $lng = array_key_exists('lng', $data) ? (float) $data['lng'] : null;
             $radius = (float) ($data['radius'] ?? 10);
 
-            $businesses = Business::query()
+            $businesses = Business::query();
+            $this->applyPublicBusinessExclusions($businesses);
+            $businesses
                 ->with(['locations' => function ($q) {
                     if ($this->hasColumn('business_locations', 'is_active')) {
                         $q->where('is_active', true);
@@ -304,17 +332,12 @@ class PublicBookingController extends Controller
                 $businesses->where('is_onboarding_completed', true);
             }
             if ($this->hasColumn('businesses', 'is_marketplace_visible')) {
-                $businesses->where(function ($visibility) {
-                    $visibility->where('is_marketplace_visible', true);
-                    if ($this->hasColumn('businesses', 'is_public')) {
-                        $visibility->orWhere('is_public', true);
-                    }
-                    if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
-                        $visibility->orWhere('is_public_profile_enabled', true);
-                    }
-                });
+                $businesses->where('is_marketplace_visible', true);
             } elseif ($this->hasColumn('businesses', 'is_public')) {
                 $businesses->where('is_public', true);
+            }
+            if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
+                $businesses->where('is_public_profile_enabled', true);
             }
             if ($vertical && $this->hasColumn('businesses', 'vertical')) {
                 $businesses->where('vertical', $vertical);
@@ -409,25 +432,8 @@ class PublicBookingController extends Controller
 
     public function business(string $slug)
     {
-        $query = Business::query()
-            ->with(['locations', 'category'])
-            ->where('slug', $slug)
-            ->where('status', 'active')
-            ->where('is_onboarding_completed', true);
-
-        if ($this->hasColumn('businesses', 'is_public_profile_enabled')) {
-            $query->where(function ($visibility) {
-                $visibility->where('is_public_profile_enabled', true);
-                if ($this->hasColumn('businesses', 'is_public')) {
-                    $visibility->orWhere('is_public', true);
-                }
-                if ($this->hasColumn('businesses', 'is_marketplace_visible')) {
-                    $visibility->orWhere('is_marketplace_visible', true);
-                }
-            });
-        } elseif ($this->hasColumn('businesses', 'is_public')) {
-            $query->where('is_public', true);
-        }
+        $query = $this->publicBusinessQuery($slug)
+            ->with(['locations', 'category']);
 
         $business = $query->firstOrFail();
 
@@ -487,7 +493,7 @@ class PublicBookingController extends Controller
 
     public function services(string $slug, Request $request)
     {
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         $services = Service::query()
             ->where('business_id', $business->id)
@@ -504,7 +510,7 @@ class PublicBookingController extends Controller
 
     public function staff(string $slug, Request $request)
     {
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
         $bookableOnly = $request->boolean('bookable_only');
 
         $staff = User::query()
@@ -537,7 +543,7 @@ class PublicBookingController extends Controller
             'location_id'=> ['nullable', 'integer'],
         ]);
 
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         $service = Service::query()
             ->where('id', (int) $data['service_id'])
@@ -624,7 +630,7 @@ class PublicBookingController extends Controller
             'location_id'   => ['nullable', 'integer'],
         ]);
 
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         $requestedIds = array_map('intval', $data['service_ids']);
         $services = Service::query()
@@ -723,7 +729,7 @@ class PublicBookingController extends Controller
             'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
         ]);
 
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         // Resolve services belonging to business and keep order
         $requestedIds = array_map('intval', $data['service_ids']);
@@ -954,7 +960,7 @@ class PublicBookingController extends Controller
             'source'              => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
         ]);
 
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         $tz   = $business->effectiveTimezone();
         $step = max(5, min(60, (int)($business->slot_step_minutes ?? 15)));
@@ -1253,7 +1259,7 @@ class PublicBookingController extends Controller
             'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
         ]);
 
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
         $service = Service::query()
             ->where('id', (int)$data['service_id'])

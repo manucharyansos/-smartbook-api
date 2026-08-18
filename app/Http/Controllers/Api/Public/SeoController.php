@@ -18,7 +18,7 @@ class SeoController extends Controller
         $base = $this->frontendBaseUrl();
         $url = $base . ($path === '/' ? '' : $path);
 
-        if (preg_match('#^/(businesses|book)/([^/?#]+)#', $path, $matches)) {
+        if (preg_match('~^/(businesses|book)/([^/?#]+)~', $path, $matches)) {
             $mode = $matches[1];
             $slug = urldecode($matches[2]);
             $business = $this->activeBusiness($slug);
@@ -43,14 +43,31 @@ class SeoController extends Controller
             }
         }
 
-        return response()->json($this->payload(
+        $static = $this->staticPageMeta($path);
+        if ($static) {
+            return response()->json($this->payload(
+                title: $static['title'],
+                description: $static['description'],
+                image: $this->defaultImage(),
+                url: $url,
+                type: 'website',
+                jsonLd: $this->siteJsonLd($base),
+                robots: $static['robots'] ?? 'index,follow,max-image-preview:large',
+            ));
+        }
+
+        $payload = $this->payload(
             title: 'Vizit — օնլայն ամրագրում սրահների ու կլինիկաների համար',
             description: 'Vizit-ը օնլայն ամրագրման համակարգ է գեղեցկության սրահների, կլինիկաների և ծառայություն մատուցող բիզնեսների համար Հայաստանում։',
             image: $this->defaultImage(),
             url: $url,
             type: 'website',
-            jsonLd: $this->siteJsonLd($base)
-        ));
+            jsonLd: $this->siteJsonLd($base),
+            robots: 'noindex,nofollow',
+        );
+        $payload['status'] = 404;
+
+        return response()->json($payload, 404);
     }
 
     public function sitemap()
@@ -62,12 +79,21 @@ class SeoController extends Controller
             ['loc' => $base . '/pricing', 'priority' => '0.8'],
             ['loc' => $base . '/about', 'priority' => '0.7'],
             ['loc' => $base . '/contact', 'priority' => '0.7'],
+            ['loc' => $base . '/support', 'priority' => '0.6'],
             ['loc' => $base . '/faq', 'priority' => '0.6'],
+            ['loc' => $base . '/privacy-policy', 'priority' => '0.4'],
+            ['loc' => $base . '/terms', 'priority' => '0.4'],
+            ['loc' => $base . '/cookies', 'priority' => '0.4'],
         ];
 
         $businesses = Business::query()
             ->where('status', 'active')
             ->where('is_onboarding_completed', true);
+
+        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
+        if ($excluded) {
+            $businesses->whereNotIn('slug', $excluded);
+        }
 
         if (Schema::hasColumn('businesses', 'is_public_profile_enabled')) {
             $businesses->where('is_public_profile_enabled', true);
@@ -115,6 +141,11 @@ class SeoController extends Controller
             ->where('status', 'active')
             ->where('is_onboarding_completed', true);
 
+        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
+        if ($excluded) {
+            $query->whereNotIn('slug', $excluded);
+        }
+
         if (Schema::hasColumn('businesses', 'is_public_profile_enabled')) {
             $query->where('is_public_profile_enabled', true);
         } elseif (Schema::hasColumn('businesses', 'is_public')) {
@@ -124,7 +155,7 @@ class SeoController extends Controller
         return $query->first();
     }
 
-    private function payload(string $title, string $description, string $image, string $url, string $type, array $jsonLd): array
+    private function payload(string $title, string $description, string $image, string $url, string $type, array $jsonLd, string $robots = 'index,follow,max-image-preview:large'): array
     {
         return [
             'title' => Str::limit($title, 70, ''),
@@ -135,7 +166,7 @@ class SeoController extends Controller
             'site_name' => 'Vizit',
             'type' => $type,
             'locale' => 'hy_AM',
-            'robots' => 'index,follow,max-image-preview:large',
+            'robots' => $robots,
             'twitter_card' => 'summary_large_image',
             'json_ld' => $jsonLd,
         ];
@@ -203,10 +234,45 @@ class SeoController extends Controller
         ];
     }
 
+    private function staticPageMeta(string $path): ?array
+    {
+        $pages = [
+            '/' => ['title' => 'Vizit.am — օնլայն ամրագրում ծառայությունների և բժշկական այցերի համար', 'description' => 'Գտեք ծառայություններն ու բժշկական կենտրոնները, ընտրեք բիզնեսը և ամրագրեք ազատ ժամը Vizit.am-ում։'],
+            '/features' => ['title' => 'Vizit-ի հնարավորությունները բիզնեսների համար', 'description' => 'Կառավարեք ամրագրումները, օրացույցը, ծառայությունները, թիմը և հաճախորդներին մեկ հարթակում։'],
+            '/pricing' => ['title' => 'Vizit-ի գնային պլանները', 'description' => 'Ընտրեք ձեր բիզնեսի չափին համապատասխան Vizit պլանը և սկսեք 14-օրյա փորձաշրջանը։'],
+            '/about' => ['title' => 'Vizit-ի մասին', 'description' => 'Ծանոթացեք Vizit.am օնլայն ամրագրման հարթակին և մեր նպատակին։'],
+            '/contact' => ['title' => 'Կապ Vizit-ի թիմի հետ', 'description' => 'Գրեք կամ զանգահարեք Vizit-ի թիմին համագործակցության, միացման և այլ հարցերով։'],
+            '/support' => ['title' => 'Vizit աջակցություն', 'description' => 'Ստացեք օգնություն Vizit-ի կարգավորումների, վճարումների և ամրագրման հոսքերի վերաբերյալ։'],
+            '/faq' => ['title' => 'Հաճախ տրվող հարցեր | Vizit', 'description' => 'Vizit.am-ի գրանցման, ամրագրումների, պլանների և աշխատանքի մասին հաճախ տրվող հարցերի պատասխաններ։'],
+            '/privacy-policy' => ['title' => 'Գաղտնիության քաղաքականություն | Vizit', 'description' => 'Կարդացեք Vizit-ի գաղտնիության քաղաքականությունը։'],
+            '/terms' => ['title' => 'Օգտագործման պայմաններ | Vizit', 'description' => 'Կարդացեք Vizit հարթակի օգտագործման պայմանները։'],
+            '/cookies' => ['title' => 'Cookie-ների քաղաքականություն | Vizit', 'description' => 'Իմացեք, թե ինչպես է Vizit-ը օգտագործում cookie-ները։'],
+            '/blog' => ['title' => 'Vizit Blog', 'description' => 'Vizit-ի հոդվածներն ու նորությունները։', 'robots' => 'noindex,follow'],
+            '/careers' => ['title' => 'Աշխատանք Vizit-ում', 'description' => 'Vizit-ի թափուր հաստիքներն ու համագործակցության հնարավորությունները։', 'robots' => 'noindex,follow'],
+            '/press' => ['title' => 'Vizit մամուլի կենտրոն', 'description' => 'Vizit-ի մամուլի և բրենդային նյութերը։', 'robots' => 'noindex,follow'],
+        ];
+
+        foreach (['/login', '/register', '/forgot-password', '/reset-password', '/business/', '/client/', '/admin', '/app', '/payment-return', '/auth/', '/mock-bank'] as $prefix) {
+            if ($path === rtrim($prefix, '/') || str_starts_with($path, $prefix)) {
+                return [
+                    'title' => 'Vizit',
+                    'description' => 'Vizit հաշվի անվտանգ մուտք և կառավարում։',
+                    'robots' => 'noindex,nofollow',
+                ];
+            }
+        }
+
+        return $pages[$path] ?? null;
+    }
+
     private function normalizePath(string $path): string
     {
         $path = '/' . ltrim(parse_url($path, PHP_URL_PATH) ?: '/', '/');
-        return $path === '//' ? '/' : $path;
+        if ($path === '//' || $path === '/') {
+            return '/';
+        }
+
+        return rtrim($path, '/');
     }
 
     private function frontendBaseUrl(): string

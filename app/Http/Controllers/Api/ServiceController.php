@@ -37,6 +37,17 @@ class ServiceController extends Controller
         return response()->json(['data' => $q->orderBy('id')->get()]);
     }
 
+    public function show(Request $request, Service $service)
+    {
+        $actor = $request->user();
+        if (!$actor) abort(401);
+        if (!$actor->isSuperAdmin() && (int) $service->business_id !== (int) $actor->business_id) {
+            abort(404);
+        }
+
+        return response()->json(['data' => $service->load('location')]);
+    }
+
     public function store(Request $request)
     {
         $actor = $request->user();

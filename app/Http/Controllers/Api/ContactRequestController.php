@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ContactRequest;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
 use App\Mail\ContactRequestReceived;
@@ -14,44 +13,22 @@ class ContactRequestController extends Controller
 {
     public function store(Request $request)
     {
-        // Validation rules
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'email' => 'nullable|email|max:255',
-            'phone' => 'nullable|string|max:20',
-            'message' => 'required|string|max:5000',
+        $data = $request->validate([
+            'name' => ['required', 'string', 'min:2', 'max:255'],
+            'email' => ['nullable', 'required_without:phone', 'email', 'max:255'],
+            'phone' => ['nullable', 'required_without:email', 'string', 'min:5', 'max:40'],
+            'message' => ['required', 'string', 'min:3', 'max:5000'],
         ]);
 
-        // Check if at least one of email or phone is provided
-        $validator->after(function ($validator) use ($request) {
-            if (!$request->email && !$request->phone) {
-                $validator->errors()->add(
-                    'contact',
-                    'Email կամ հեռախոս դաշտերից գոնե մեկը պարտադիր է։'
-                );
-            }
-        });
+        $businessId = $request->user()?->business_id;
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Վավերացման սխալ',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        // Get business_id if user is authenticated (փոխել salon_id-ից business_id)
-        $businessId = auth()->check() && auth()->user()->business_id
-            ? auth()->user()->business_id
-            : null;
-
-        // Create contact request
         $contactRequest = ContactRequest::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'phone' => $request->phone,
-            'message' => $request->message,
-            'business_id' => $businessId, // Փոխել salon_id-ից business_id
-            'status' => 'new'
+            'name' => trim($data['name']),
+            'email' => isset($data['email']) ? mb_strtolower(trim($data['email'])) : null,
+            'phone' => isset($data['phone']) ? trim($data['phone']) : null,
+            'message' => trim($data['message']),
+            'business_id' => $businessId,
+            'status' => 'new',
         ]);
 
         // Queue admin email so the public contact form stays fast.
@@ -66,7 +43,6 @@ class ContactRequestController extends Controller
 
         return response()->json([
             'message' => 'Հաղորդագրությունը հաջողությամբ ուղարկվեց',
-            'data' => $contactRequest
         ], 201);
     }
 

@@ -1,0 +1,69 @@
+<?php
+
+use App\Models\Business;
+
+it('does not list or expose reserved test businesses publicly', function () {
+    config()->set('services.public_booking.excluded_slugs', ['test', 'test-2']);
+
+    Business::factory()->onboardingCompleted()->create([
+        'name' => 'Internal Test Business',
+        'slug' => 'test',
+        'status' => 'active',
+        'is_public' => true,
+        'is_public_profile_enabled' => true,
+    ]);
+
+    $this->getJson('/api/public/businesses')
+        ->assertOk()
+        ->assertJsonMissing(['slug' => 'test']);
+
+    $this->getJson('/api/public/businesses/map')
+        ->assertOk()
+        ->assertJsonMissing(['slug' => 'test']);
+
+    $this->getJson('/api/public/businesses/test')
+        ->assertNotFound();
+
+    $this->getJson('/api/public/businesses/test/services')
+        ->assertNotFound();
+
+    $this->getJson('/api/public/seo/meta?path=/businesses/test')
+        ->assertNotFound()
+        ->assertJsonPath('status', 404);
+});
+
+it('keeps profile and marketplace visibility controls independent', function () {
+    $profileOnly = Business::factory()->onboardingCompleted()->create([
+        'name' => 'Profile Only Business',
+        'slug' => 'profile-only',
+        'status' => 'active',
+        'is_public' => true,
+        'is_public_profile_enabled' => true,
+        'is_marketplace_visible' => false,
+    ]);
+
+    Business::factory()->onboardingCompleted()->create([
+        'name' => 'Marketplace Flag Without Profile',
+        'slug' => 'marketplace-without-profile',
+        'status' => 'active',
+        'is_public' => true,
+        'is_public_profile_enabled' => false,
+        'is_marketplace_visible' => true,
+    ]);
+
+    $directory = $this->getJson('/api/public/businesses')->assertOk();
+    $directory
+        ->assertJsonMissing(['slug' => $profileOnly->slug])
+        ->assertJsonMissing(['slug' => 'marketplace-without-profile']);
+
+    $this->getJson('/api/public/businesses/profile-only')->assertOk();
+    $this->getJson('/api/public/businesses/marketplace-without-profile')->assertNotFound();
+    $this->getJson('/api/public/businesses/marketplace-without-profile/services')->assertNotFound();
+});
+
+it('returns non-indexable metadata with a real not-found status for unknown pages', function () {
+    $this->getJson('/api/public/seo/meta?path=/definitely-missing')
+        ->assertNotFound()
+        ->assertJsonPath('status', 404)
+        ->assertJsonPath('robots', 'noindex,nofollow');
+});
