@@ -13,14 +13,17 @@ class BusinessFactory extends Factory
 
     public function definition(): array
     {
-        $name = $this->faker->company();
+        // Keep the factory independent from the configured Faker locale.
+        // Some supported locales do not provide company/address formatters.
+        $suffix = Str::upper(Str::random(8));
+        $name = 'Test Business ' . $suffix;
 
         return [
             'name' => $name,
             'slug' => Str::slug($name) . '-' . Str::random(4),
             'business_type' => $this->faker->randomElement(['beauty', 'dental']),
-            'phone' => $this->faker->e164PhoneNumber(),
-            'address' => $this->faker->address(),
+            'phone' => '+37499' . $this->faker->numerify('######'),
+            'address' => 'Test address ' . $suffix,
             'is_onboarding_completed' => $this->faker->boolean(80),
             'status' => 'active',
             'billing_status' => 'active',
