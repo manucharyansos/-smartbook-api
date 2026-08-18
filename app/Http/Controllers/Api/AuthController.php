@@ -142,6 +142,7 @@ class AuthController extends Controller
             'business_category_id' => ['nullable','integer','exists:business_categories,id'],
             'business_category_slug' => ['nullable','string','max:120'],
             'custom_category_name' => ['nullable','string','max:120'],
+            'plan_code' => ['nullable','string','max:80'],
 
             'name' => ['required','string','min:2','max:120'],
             'email' => ['required','email','max:255','unique:users,email'],
@@ -166,6 +167,19 @@ class AuthController extends Controller
         // belongs to business_category_id, not to the legacy beauty/dental field.
         $businessType = $vertical;
 
+        $requestedPlanCode = trim((string) ($data['plan_code'] ?? 'start')) ?: 'start';
+        $plan = Plan::query()
+            ->where('code', $requestedPlanCode)
+            ->where('is_active', true)
+            ->where('is_visible', true)
+            ->first();
+
+        if (!$plan || !$plan->isSelfServe() || !$plan->supportsBusinessType($businessType)) {
+            throw ValidationException::withMessages([
+                'plan_code' => 'The selected plan is not available for self-service registration.',
+            ]);
+        }
+
         $categoryId = $data['business_category_id'] ?? null;
         if (!$categoryId && !empty($data['business_category_slug'])) {
             $categoryId = BusinessCategory::query()
@@ -174,7 +188,7 @@ class AuthController extends Controller
                 ->value('id');
         }
 
-        $out = DB::transaction(function () use ($data, $phoneNorm, $fingerprint, $request, $trialDays, $vertical, $businessType, $categoryId) {
+        $out = DB::transaction(function () use ($data, $phoneNorm, $fingerprint, $request, $trialDays, $vertical, $businessType, $categoryId, $plan) {
             // unique slug
             $baseSlug = Str::slug($data['business_name']);
             $slug = $baseSlug ?: 'business';
@@ -245,11 +259,6 @@ class AuthController extends Controller
                 'is_bookable' => true,
             ]);
 
-            // Pick starter plan that matches business type
-            $plan = Plan::query()
-                ->where('code', 'start')
-                ->first();
-
             $sub = new Subscription([
                 'business_id' => $business->id,
                 'status' => Subscription::STATUS_TRIALING,
@@ -257,11 +266,7 @@ class AuthController extends Controller
             ]);
 
             // ✅ snapshot features/seats from the selected plan
-            if ($plan) {
-                $sub->applyPlanSnapshot($plan);
-            } else {
-                $sub->plan_id = 1;
-            }
+            $sub->applyPlanSnapshot($plan);
 
             $sub->save();
 

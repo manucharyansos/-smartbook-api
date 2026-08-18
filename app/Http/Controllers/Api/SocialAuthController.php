@@ -40,6 +40,7 @@ class SocialAuthController extends Controller
             'mode' => ['nullable', 'in:login,register'],
             'audience' => ['nullable', 'in:business,client'],
             'business_type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare'],
+            'plan_code' => ['nullable', 'string', 'max:80'],
         ]);
 
         $callbackUrl = $data['callback_url'];
@@ -49,12 +50,27 @@ class SocialAuthController extends Controller
             ]);
         }
 
+        $audience = $data['audience'] ?? 'client';
+        $mode = $data['mode'] ?? 'login';
+        $businessType = BusinessVertical::canonicalBusinessType($data['business_type'] ?? BusinessVertical::SERVICES);
+        $planCode = null;
+
+        if ($audience === 'business' && $mode === 'register') {
+            $planCode = trim((string) ($data['plan_code'] ?? 'start')) ?: 'start';
+            if (!$this->selfServePlan($planCode, $businessType)) {
+                throw ValidationException::withMessages([
+                    'plan_code' => 'The selected plan is not available for self-service registration.',
+                ]);
+            }
+        }
+
         $context = [
             'provider' => $provider,
             'callback_url' => $callbackUrl,
-            'audience' => $data['audience'] ?? 'client',
-            'mode' => $data['mode'] ?? 'login',
-            'business_type' => BusinessVertical::canonicalBusinessType($data['business_type'] ?? BusinessVertical::SERVICES),
+            'audience' => $audience,
+            'mode' => $mode,
+            'business_type' => $businessType,
+            'plan_code' => $planCode,
             'fingerprint' => trim((string) ($request->header('X-Device-Fingerprint') ?? $request->query('device_fingerprint', ''))),
             'created_at' => now()->toIso8601String(),
         ];
@@ -65,7 +81,7 @@ class SocialAuthController extends Controller
             10,
             '/',
             null,
-            $request->isSecure(),
+            (bool) config('session.secure', $request->isSecure()),
             true,
             false,
             'lax'
@@ -319,7 +335,14 @@ class SocialAuthController extends Controller
                     'email_verified_at' => now(),
                 ]);
 
-                $plan = Plan::query()->where('code', 'start')->first();
+                $planCode = trim((string) ($context['plan_code'] ?? 'start')) ?: 'start';
+                $plan = $this->selfServePlan($planCode, $vertical);
+
+                if (!$plan) {
+                    throw ValidationException::withMessages([
+                        'plan_code' => 'The selected plan is not available for self-service registration.',
+                    ]);
+                }
 
                 $subscription = new Subscription([
                     'business_id' => $business->id,
@@ -327,11 +350,7 @@ class SocialAuthController extends Controller
                     'trial_ends_at' => now()->addDays((int) config('billing.trial_days', 14) ?: 14),
                 ]);
 
-                if ($plan) {
-                    $subscription->applyPlanSnapshot($plan);
-                } else {
-                    $subscription->plan_id = 1;
-                }
+                $subscription->applyPlanSnapshot($plan);
 
                 $subscription->save();
 
@@ -413,6 +432,21 @@ class SocialAuthController extends Controller
     {
         $ownerName = trim($ownerName);
         return $ownerName !== '' ? sprintf('%s Studio', $ownerName) : 'My Business';
+    }
+
+    private function selfServePlan(string $code, string $businessType): ?Plan
+    {
+        $plan = Plan::query()
+            ->where('code', $code)
+            ->where('is_active', true)
+            ->where('is_visible', true)
+            ->first();
+
+        if (!$plan || !$plan->isSelfServe() || !$plan->supportsBusinessType($businessType)) {
+            return null;
+        }
+
+        return $plan;
     }
 
     private function driver(string $provider)

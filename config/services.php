@@ -67,6 +67,13 @@ return [
             'PUBLIC_BOOKING_FRONTEND_URL',
             env('FRONTEND_APP_URL', env('APP_FRONTEND_URL', 'https://vizit.am'))
         ),
+        'excluded_slugs' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env(
+                'PUBLIC_EXCLUDED_BUSINESS_SLUGS',
+                env('APP_ENV', 'production') === 'production' ? 'test,test-2' : ''
+            ))
+        ))),
     ],
 
     'sms' => [

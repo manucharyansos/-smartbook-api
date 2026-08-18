@@ -17,6 +17,12 @@ class MediaUrl
                 return $value;
             }
 
+            $valueHost = strtolower((string) ($parts['host'] ?? ''));
+            $appHost = strtolower((string) (parse_url((string) config('app.url'), PHP_URL_HOST) ?: ''));
+            if ($valueHost !== '' && $appHost !== '' && $valueHost !== $appHost) {
+                return $value;
+            }
+
             return self::absolute($path);
         }
 

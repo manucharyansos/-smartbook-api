@@ -20,7 +20,7 @@
 
     <p>
         Եթե հարց ունեք՝ պատասխանեք այս նամակին կամ գրեք WhatsApp՝
-        <strong>{{ config('app.support_whatsapp', '+37498408779') }}</strong>
+        <strong>{{ config('app.support_whatsapp', '+37498408879') }}</strong>
     </p>
 
     <p style="color:#666; font-size:12px; margin-top:18px;">Vizit</p>
