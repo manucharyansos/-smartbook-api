@@ -275,6 +275,8 @@ class SocialAuthController extends Controller
                 'business_name' => ['required', 'string', 'min:2', 'max:120'],
                 'business_phone' => ['required', 'string', 'max:40'],
                 'business_address' => ['required', 'string', 'max:255'],
+                'latitude' => ['required', 'numeric', 'between:-90,90'],
+                'longitude' => ['required', 'numeric', 'between:-180,180'],
             ]);
 
             $businessData['business_phone'] = Phone::normalizeAM($businessData['business_phone']);
@@ -467,6 +469,8 @@ class SocialAuthController extends Controller
             $location = $business->locations()->create([
                 'name' => $businessName,
                 'address' => $business->address,
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
                 'phone' => $business->phone,
                 'is_primary' => true,
                 'is_active' => true,
@@ -513,10 +517,17 @@ class SocialAuthController extends Controller
     {
         $business = $user->business;
 
-        return !$business
-            || trim((string) $business->phone) === ''
+        if (!$business) {
+            return true;
+        }
+
+        $primaryLocation = $business->locations()->where('is_primary', true)->first();
+
+        return trim((string) $business->phone) === ''
             || trim((string) $business->address) === ''
-            || !$business->locations()->where('is_primary', true)->exists();
+            || !$primaryLocation
+            || $primaryLocation->latitude === null
+            || $primaryLocation->longitude === null;
     }
 
     private function providerName(array $providerUser, string $fallback): string
@@ -569,6 +580,8 @@ class SocialAuthController extends Controller
             $locationData = [
                 'name' => $business->name,
                 'address' => $business->address,
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
                 'phone' => $business->phone,
                 'is_primary' => true,
                 'is_active' => true,

@@ -31,6 +31,8 @@ function registrationPayload(array $overrides = []): array
         'business_name' => 'Plan Test Studio',
         'business_phone' => '+37498408879',
         'business_address' => 'Yerevan, Armenia',
+        'latitude' => 40.1772,
+        'longitude' => 44.5035,
         'business_type' => 'beauty',
         'name' => 'Plan Test Owner',
         'email' => 'owner@example.com',
@@ -70,6 +72,12 @@ it('starts the trial with the visible self-serve plan selected on pricing', func
         'plan_id' => $studio->id,
         'status' => 'trialing',
     ]);
+    $this->assertDatabaseHas('business_locations', [
+        'business_id' => $businessId,
+        'latitude' => 40.1772,
+        'longitude' => 44.5035,
+        'is_primary' => true,
+    ]);
 });
 
 it('rejects hidden or sales-assisted plans during self-service registration', function () {
@@ -101,6 +109,19 @@ it('requires the address before registration creates a business', function () {
     ]))
         ->assertUnprocessable()
         ->assertJsonValidationErrors('business_address');
+
+    $this->assertDatabaseCount('businesses', 0);
+});
+
+it('requires map coordinates before registration creates a business', function () {
+    registrationPlan();
+
+    $this->postJson('/api/auth/register', registrationPayload([
+        'latitude' => null,
+        'longitude' => null,
+    ]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['latitude', 'longitude']);
 
     $this->assertDatabaseCount('businesses', 0);
 });

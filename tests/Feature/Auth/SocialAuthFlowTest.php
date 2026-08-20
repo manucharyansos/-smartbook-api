@@ -298,11 +298,23 @@ it('creates a complete business and primary location through Google registration
     ])->assertUnprocessable();
     $this->assertDatabaseCount('businesses', 0);
 
+    $this->postJson('/api/auth/social/exchange', [
+        'code' => $frontendQuery['code'],
+        'business_name' => 'Social Beauty Studio',
+        'business_phone' => '098408879',
+        'business_address' => 'Երևան, Ամիրյան փողոց 1',
+    ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['latitude', 'longitude']);
+    $this->assertDatabaseCount('businesses', 0);
+
     $exchange = $this->postJson('/api/auth/social/exchange', [
         'code' => $frontendQuery['code'],
         'business_name' => 'Social Beauty Studio',
         'business_phone' => '098408879',
         'business_address' => 'Երևան, Ամիրյան փողոց 1',
+        'latitude' => 40.179186,
+        'longitude' => 44.513134,
     ]);
 
     $exchange
@@ -322,6 +334,8 @@ it('creates a complete business and primary location through Google registration
     $this->assertDatabaseHas('business_locations', [
         'business_id' => $businessId,
         'address' => 'Երևան, Ամիրյան փողոց 1',
+        'latitude' => 40.179186,
+        'longitude' => 44.513134,
         'phone' => '+37498408879',
         'is_primary' => true,
     ]);
