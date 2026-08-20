@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ClientAccount;
 use App\Services\ClientIdentityLinker;
 use Illuminate\Auth\Events\PasswordReset;
+use Illuminate\Auth\Events\Verified;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -20,19 +21,16 @@ class ClientAuthController extends Controller
         if ($request->filled('email')) {
             $request->merge(['email' => $linker->normalizeEmail($request->input('email'))]);
         }
+        if ($request->filled('phone')) {
+            $request->merge(['phone' => $linker->normalizePhone($request->input('phone'))]);
+        }
 
         $data = $request->validate([
             'name' => ['required', 'string', 'min:2', 'max:120'],
-            'email' => ['nullable', 'email', 'max:190', 'unique:client_accounts,email'],
+            'email' => ['required', 'email', 'max:190', 'unique:client_accounts,email'],
             'phone' => ['nullable', 'string', 'min:5', 'max:40', 'unique:client_accounts,phone'],
             'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
         ]);
-
-        if (empty($data['email']) && empty($data['phone'])) {
-            throw ValidationException::withMessages([
-                'email' => 'Նշիր էլ. փոստ կամ հեռախոսահամար։',
-            ]);
-        }
 
         $account = ClientAccount::query()->create([
             'name' => $data['name'],
@@ -41,7 +39,7 @@ class ClientAuthController extends Controller
             'password' => Hash::make($data['password']),
         ]);
 
-        $linker->syncLinkedClients($account);
+        $verificationSent = $this->sendVerificationNotification($account);
         $account->forceFill(['last_login_at' => now()])->save();
 
         $token = $account->createToken('client-api')->plainTextToken;
@@ -49,6 +47,7 @@ class ClientAuthController extends Controller
         return response()->json([
             'token' => $token,
             'user' => $this->serialize($account),
+            'verification_sent' => $verificationSent,
         ]);
     }
 
@@ -160,17 +159,60 @@ class ClientAuthController extends Controller
 
     public function me(Request $request)
     {
-        /** @var ClientAccount $account */
-        $account = $request->user();
+        $account = $this->authenticatedAccount($request);
 
         return response()->json([
             'user' => $this->serialize($account),
         ]);
     }
 
+    public function resendVerification(Request $request)
+    {
+        $account = $this->authenticatedAccount($request);
+
+        if ($account->hasVerifiedEmail()) {
+            return response()->json([
+                'ok' => true,
+                'already_verified' => true,
+                'message' => 'Email is already verified.',
+            ]);
+        }
+
+        return response()->json([
+            'ok' => $this->sendVerificationNotification($account),
+            'already_verified' => false,
+            'message' => 'Verification link has been sent.',
+        ]);
+    }
+
+    public function verifyEmail(Request $request, int $id, string $hash, ClientIdentityLinker $linker)
+    {
+        $account = $this->authenticatedAccount($request);
+
+        abort_unless((int) $account->id === $id, 403);
+
+        abort_unless(
+            hash_equals(sha1($account->getEmailForVerification()), $hash),
+            403,
+        );
+
+        if (!$account->hasVerifiedEmail()) {
+            $account->markEmailAsVerified();
+            event(new Verified($account));
+        }
+
+        $account->refresh();
+        $linker->syncLinkedClients($account);
+
+        return response()->json([
+            'ok' => true,
+            'user' => $this->serialize($account),
+        ]);
+    }
+
     public function logout(Request $request)
     {
-        $request->user()?->currentAccessToken()?->delete();
+        $this->authenticatedAccount($request)->currentAccessToken()?->delete();
 
         return response()->json(['ok' => true]);
     }
@@ -188,6 +230,31 @@ class ClientAuthController extends Controller
             'business_slug' => null,
             'business_type' => null,
             'needs_onboarding' => false,
+            'email_verified' => $account->hasVerifiedEmail(),
+            'requires_email_verification' => !$account->hasVerifiedEmail(),
         ];
+    }
+
+    private function sendVerificationNotification(ClientAccount $account): bool
+    {
+        try {
+            $account->sendEmailVerificationNotification();
+            return true;
+        } catch (\Throwable $e) {
+            Log::error('Client email verification could not be sent.', [
+                'account_id' => $account->id,
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    private function authenticatedAccount(Request $request): ClientAccount
+    {
+        $account = $request->user();
+        abort_unless($account instanceof ClientAccount, 401);
+
+        return $account;
     }
 }

@@ -178,10 +178,15 @@ Route::prefix('client/auth')->group(function () {
     Route::post('login', [ClientAuthController::class, 'login'])->middleware('throttle:10,1');
     Route::post('forgot-password', [ClientAuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
     Route::post('reset-password', [ClientAuthController::class, 'resetPassword'])->middleware('throttle:10,1');
+    Route::get('email/verify/{id}/{hash}', [ClientAuthController::class, 'verifyEmail'])
+        ->middleware(['auth:sanctum', 'signed', 'throttle:10,1'])
+        ->name('verification.verify');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('me', [ClientAuthController::class, 'me']);
         Route::post('logout', [ClientAuthController::class, 'logout']);
+        Route::post('email/verification-notification', [ClientAuthController::class, 'resendVerification'])
+            ->middleware('throttle:3,1');
     });
 });
 
@@ -490,7 +495,7 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
 |--------------------------------------------------------------------------
 */
 Route::prefix('admin')->group(function () {
-    Route::post('/login', [AdminAuthController::class, 'login']);
+    Route::post('/login', [AdminAuthController::class, 'login'])->middleware('throttle:5,1');
 });
 
 
@@ -503,11 +508,11 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/logout', [AdminAuthController::class, 'logout']);
     Route::get('/me', [AdminAuthController::class, 'me']);
 
-    Route::get('/dashboard', [AdminDashboardController::class, 'index']);
-    Route::get('/analytics', [AdminDashboardController::class, 'analytics']);
+    Route::get('/dashboard', [AdminDashboardController::class, 'index'])->middleware('admin:super_admin');
+    Route::get('/analytics', [AdminDashboardController::class, 'analytics'])->middleware('admin:super_admin');
 
     Route::get('/businesses', [BusinessManagementController::class, 'index']);
-    Route::get('/businesses/{business}', [BusinessManagementController::class, 'show']);
+    Route::get('/businesses/{business}', [BusinessManagementController::class, 'show'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/suspend', [BusinessManagementController::class, 'suspend'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/restore', [BusinessManagementController::class, 'restore'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/plan', [BusinessManagementController::class, 'updatePlan'])->middleware('admin:super_admin');
@@ -518,9 +523,12 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::get('/users', [UserManagementController::class, 'index']);
     Route::get('/users/{user}', [UserManagementController::class, 'show']);
-    Route::patch('/users/{user}/toggle-active', [UserManagementController::class, 'toggleActive']);
+    Route::put('/users/{user}', [UserManagementController::class, 'update'])->middleware('admin:super_admin,admin');
+    Route::patch('/users/{user}/toggle-active', [UserManagementController::class, 'toggleActive'])->middleware('admin:super_admin,admin');
 
     Route::apiResource('/admins', AdminManagementController::class)->middleware('admin:super_admin');
+    Route::patch('/admins/{admin}/toggle-active', [AdminManagementController::class, 'toggleActive'])->middleware('admin:super_admin');
+    Route::post('/admins/{admin}/password', [AdminManagementController::class, 'updatePassword'])->middleware('admin:super_admin');
 
     Route::get('/logs', [LogController::class, 'index'])->middleware('admin:super_admin');
     Route::get('/logs/{id}', [LogController::class, 'show'])->middleware('admin:super_admin');

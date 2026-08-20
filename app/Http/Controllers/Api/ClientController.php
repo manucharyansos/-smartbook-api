@@ -27,18 +27,22 @@ class ClientController extends Controller
         $query = $business->clients()
             ->select('clients.*')
             ->withCount([
-                'bookings as bookings_count' => fn (Builder $q) => $q->where('status', '!=', 'cancelled'),
+                'bookings as bookings_count' => fn (Builder $q) => $q
+                    ->where('business_id', $business->id)
+                    ->where('status', '!=', 'cancelled'),
             ])
             ->addSelect([
                 'last_booking_at' => Booking::query()
                     ->select('starts_at')
                     ->whereColumn('client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->where('status', '!=', 'cancelled')
                     ->orderByDesc('starts_at')
                     ->limit(1),
                 'next_booking_at' => Booking::query()
                     ->select('starts_at')
                     ->whereColumn('client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->whereIn('status', ['pending', 'confirmed'])
                     ->where('starts_at', '>=', now())
                     ->orderBy('starts_at')
@@ -46,6 +50,7 @@ class ClientController extends Controller
                 'total_spent' => Booking::query()
                     ->selectRaw('COALESCE(SUM(final_price), 0)')
                     ->whereColumn('client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->where('status', '!=', 'cancelled'),
             ]);
 
@@ -80,6 +85,7 @@ class ClientController extends Controller
                 $sub->selectRaw('1')
                     ->from('bookings')
                     ->whereColumn('bookings.client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->whereIn('bookings.status', ['pending', 'confirmed'])
                     ->where('bookings.starts_at', '>=', now());
             });
@@ -88,12 +94,14 @@ class ClientController extends Controller
                 $sub->selectRaw('1')
                     ->from('bookings')
                     ->whereColumn('bookings.client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->where('bookings.status', '!=', 'cancelled')
                     ->where('bookings.starts_at', '<', $lostThreshold);
             })->whereNotExists(function ($sub) use ($lostThreshold) {
                 $sub->selectRaw('1')
                     ->from('bookings')
                     ->whereColumn('bookings.client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
                     ->where('bookings.status', '!=', 'cancelled')
                     ->where('bookings.starts_at', '>=', $lostThreshold);
             });
@@ -174,41 +182,55 @@ class ClientController extends Controller
         $business = $request->user()->business;
 
         if ((int) $client->business_id !== (int) $business->id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            abort(404);
         }
 
         $client->loadCount([
-            'bookings as bookings_count' => fn (Builder $q) => $q->where('status', '!=', 'cancelled'),
+            'bookings as bookings_count' => fn (Builder $q) => $q
+                ->where('business_id', $business->id)
+                ->where('status', '!=', 'cancelled'),
         ]);
 
         $recentBookings = $client->bookings()
+            ->where('business_id', $business->id)
             ->with(['service', 'staff', 'items.service'])
             ->orderByDesc('starts_at')
             ->limit(10)
             ->get();
 
         $upcoming = $client->bookings()
+            ->where('business_id', $business->id)
             ->whereIn('status', ['pending', 'confirmed'])
             ->where('starts_at', '>=', now())
             ->orderBy('starts_at')
             ->first();
 
         $lastVisit = $client->bookings()
+            ->where('business_id', $business->id)
             ->where('status', '!=', 'cancelled')
             ->orderByDesc('starts_at')
             ->first();
 
         $totalSpent = (int) ($client->bookings()
+            ->where('business_id', $business->id)
             ->where('status', '!=', 'cancelled')
             ->sum('final_price') ?? 0);
 
-        $completedCount = (int) $client->bookings()->where('status', 'done')->count();
-        $cancelledCount = (int) $client->bookings()->where('status', 'cancelled')->count();
-        $noShowCount = (int) $client->bookings()->where('status', 'no_show')->count();
+        $completedCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'done')->count();
+        $cancelledCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'cancelled')->count();
+        $noShowCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'no_show')->count();
         $avgTicket = $completedCount > 0 ? round($totalSpent / $completedCount, 1) : 0.0;
 
-        $clientNotes = $client->clientNotes()->with('user')->limit(12)->get();
-        $clientReminders = $client->clientReminders()->with(['user', 'deliveries'])->limit(12)->get();
+        $clientNotes = $client->clientNotes()
+            ->where('business_id', $business->id)
+            ->with('user')
+            ->limit(12)
+            ->get();
+        $clientReminders = $client->clientReminders()
+            ->where('business_id', $business->id)
+            ->with(['user', 'deliveries'])
+            ->limit(12)
+            ->get();
 
         $timeline = collect()
             ->merge($recentBookings->map(function ($booking) {
@@ -249,6 +271,7 @@ class ClientController extends Controller
             ->values();
 
         $favoriteServiceRow = $client->bookings()
+            ->where('business_id', $business->id)
             ->select('service_id', DB::raw('COUNT(*) as total'))
             ->whereNotNull('service_id')
             ->where('status', '!=', 'cancelled')
@@ -257,6 +280,7 @@ class ClientController extends Controller
             ->first();
 
         $favoriteStaffRow = $client->bookings()
+            ->where('business_id', $business->id)
             ->select('staff_id', DB::raw('COUNT(*) as total'))
             ->whereNotNull('staff_id')
             ->where('status', '!=', 'cancelled')
@@ -265,6 +289,7 @@ class ClientController extends Controller
             ->first();
 
         $favoriteSource = $client->bookings()
+            ->where('business_id', $business->id)
             ->pluck('source')
             ->map(fn ($source) => trim((string) $source))
             ->map(fn ($source) => $source !== '' ? $source : 'unknown')
@@ -275,12 +300,20 @@ class ClientController extends Controller
 
         $favoriteServiceName = null;
         if ($favoriteServiceRow?->service_id) {
-            $favoriteServiceName = optional($client->bookings()->with('service')->where('service_id', $favoriteServiceRow->service_id)->first()?->service)->name;
+            $favoriteServiceName = optional($client->bookings()
+                ->where('business_id', $business->id)
+                ->with('service')
+                ->where('service_id', $favoriteServiceRow->service_id)
+                ->first()?->service)->name;
         }
 
         $favoriteStaffName = null;
         if ($favoriteStaffRow?->staff_id) {
-            $favoriteStaffName = optional($client->bookings()->with('staff')->where('staff_id', $favoriteStaffRow->staff_id)->first()?->staff)->name;
+            $favoriteStaffName = optional($client->bookings()
+                ->where('business_id', $business->id)
+                ->with('staff')
+                ->where('staff_id', $favoriteStaffRow->staff_id)
+                ->first()?->staff)->name;
         }
 
         return response()->json([
@@ -343,7 +376,7 @@ class ClientController extends Controller
         $business = $request->user()->business;
 
         if ((int) $client->business_id !== (int) $business->id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            abort(404);
         }
 
         $data = $request->validate([
@@ -377,12 +410,13 @@ class ClientController extends Controller
         $business = $request->user()->business;
 
         if ((int) $client->business_id !== (int) $business->id) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            abort(404);
         }
 
         $perPage = max(1, min(100, (int) $request->integer('per_page', 20)));
 
         $bookings = $client->bookings()
+            ->where('business_id', $business->id)
             ->with(['service', 'staff', 'items.service'])
             ->orderByDesc('starts_at')
             ->paginate($perPage);

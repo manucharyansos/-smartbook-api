@@ -15,6 +15,19 @@ class LogController extends Controller
     {
         $query = AdminLog::with('admin');
 
+        if ($request->filled('search')) {
+            $search = trim((string) $request->string('search'));
+            $query->where(function ($builder) use ($search) {
+                $builder->where('action', 'like', "%{$search}%")
+                    ->orWhere('model_type', 'like', "%{$search}%")
+                    ->orWhere('ip_address', 'like', "%{$search}%")
+                    ->orWhereHas('admin', function ($adminQuery) use ($search) {
+                        $adminQuery->where('name', 'like', "%{$search}%")
+                            ->orWhere('email', 'like', "%{$search}%");
+                    });
+            });
+        }
+
         // Filter by admin
         if ($request->has('admin_id')) {
             $query->where('admin_id', $request->admin_id);
@@ -38,7 +51,7 @@ class LogController extends Controller
             $query->where('model_type', $request->model_type);
         }
 
-        $logs = $query->latest()->paginate($request->get('per_page', 20));
+        $logs = $query->latest()->paginate(max(1, min(100, $request->integer('per_page', 20))));
 
         return response()->json([
             'data' => $logs,
@@ -70,7 +83,7 @@ class LogController extends Controller
         $logs = AdminLog::where('admin_id', $adminId)
             ->with('admin')
             ->latest()
-            ->paginate($request->get('per_page', 20));
+            ->paginate(max(1, min(100, $request->integer('per_page', 20))));
 
         return response()->json([
             'data' => $logs

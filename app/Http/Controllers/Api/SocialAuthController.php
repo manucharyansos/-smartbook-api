@@ -363,6 +363,7 @@ class SocialAuthController extends Controller
                 'last_login_at' => now(),
             ]);
         } else {
+            $wasUnverified = !$account->hasVerifiedEmail();
             $account->forceFill([
                 'name' => $account->name ?: $name,
                 'email' => $account->email ?: $email,
@@ -372,6 +373,14 @@ class SocialAuthController extends Controller
                 'email_verified_at' => $account->email_verified_at ?: now(),
                 'last_login_at' => now(),
             ])->save();
+
+            // A social provider proves control of the email address. If an
+            // unverified local account had claimed it first, invalidate that
+            // account's password and sessions before attaching the provider.
+            if ($wasUnverified) {
+                $account->forceFill(['password' => Hash::make(Str::random(64))])->save();
+                $account->tokens()->delete();
+            }
         }
 
         $linker->syncLinkedClients($account);
@@ -903,6 +912,8 @@ class SocialAuthController extends Controller
             'business_slug' => null,
             'business_type' => null,
             'needs_onboarding' => false,
+            'email_verified' => $account->hasVerifiedEmail(),
+            'requires_email_verification' => !$account->hasVerifiedEmail(),
         ];
     }
 

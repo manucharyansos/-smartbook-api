@@ -27,19 +27,17 @@ class ClientIdentityLinker
     public function findMatchingAccount(?string $email, ?string $phone): ?ClientAccount
     {
         $email = $this->normalizeEmail($email);
-        $phone = $this->normalizePhone($phone);
+
+        // Phone ownership is not considered verified until a dedicated phone
+        // verification flow exists. Never link private booking history from a
+        // phone number that was merely typed into the registration form.
+        if (!$email) {
+            return null;
+        }
 
         return ClientAccount::query()
-            ->when($email || $phone, function ($q) use ($email, $phone) {
-                $q->where(function ($inner) use ($email, $phone) {
-                    if ($email) {
-                        $inner->orWhere('email', $email);
-                    }
-                    if ($phone) {
-                        $inner->orWhere('phone', $phone);
-                    }
-                });
-            })
+            ->whereNotNull('email_verified_at')
+            ->whereRaw('LOWER(email) = ?', [$email])
             ->first();
     }
 
@@ -57,22 +55,16 @@ class ClientIdentityLinker
 
     public function syncLinkedClients(ClientAccount $account): int
     {
-        $email = $this->normalizeEmail($account->email);
-        $phone = $this->normalizePhone($account->phone);
+        $email = $account->hasVerifiedEmail()
+            ? $this->normalizeEmail($account->email)
+            : null;
 
-        if (!$email && !$phone) {
+        if (!$email) {
             return 0;
         }
 
         return Client::query()
-            ->where(function ($q) use ($email, $phone) {
-                if ($email) {
-                    $q->orWhere('email', $email);
-                }
-                if ($phone) {
-                    $q->orWhere('phone', $phone);
-                }
-            })
+            ->whereRaw('LOWER(email) = ?', [$email])
             ->where(function ($q) use ($account) {
                 $q->whereNull('client_account_id')
                     ->orWhere('client_account_id', $account->id);

@@ -2,14 +2,17 @@
 
 namespace App\Models;
 
+use App\Notifications\ClientVerifyEmail;
+use Illuminate\Auth\MustVerifyEmail;
+use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
-class ClientAccount extends Authenticatable
+class ClientAccount extends Authenticatable implements MustVerifyEmailContract
 {
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, MustVerifyEmail, Notifiable;
 
     public const ROLE = 'client';
 
@@ -39,5 +42,10 @@ class ClientAccount extends Authenticatable
     public function clientProfiles()
     {
         return $this->hasMany(Client::class);
+    }
+
+    public function sendEmailVerificationNotification()
+    {
+        $this->notify(new ClientVerifyEmail());
     }
 }

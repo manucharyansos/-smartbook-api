@@ -38,10 +38,20 @@ class BusinessManagementController extends Controller
 
         if ($request->filled('business_type')) {
             $vertical = BusinessVertical::normalize((string) $request->business_type);
-            $query->where('vertical', $vertical);
+            $legacyTypes = $vertical === BusinessVertical::HEALTHCARE
+                ? ['healthcare', 'dental', 'clinic']
+                : ['services', 'beauty', 'salon'];
+            $query->where(function ($builder) use ($vertical, $legacyTypes) {
+                $builder->where('vertical', $vertical)
+                    ->orWhere(function ($legacyQuery) use ($legacyTypes) {
+                        $legacyQuery->where(function ($emptyVertical) {
+                            $emptyVertical->whereNull('vertical')->orWhere('vertical', '');
+                        })->whereIn('business_type', $legacyTypes);
+                    });
+            });
         }
 
-        $businesses = $query->paginate($request->get('per_page', 20));
+        $businesses = $query->paginate(max(1, min(100, $request->integer('per_page', 20))));
 
         return response()->json([
             'success' => true,
@@ -240,12 +250,13 @@ class BusinessManagementController extends Controller
 
     public function suspend(Business $business, Request $request)
     {
-        $business->update(['status' => 'suspended']);
-
-        User::where('business_id', $business->id)->update(['is_active' => false]);
+        $business->update([
+            'status' => 'suspended',
+            'suspended_at' => now(),
+        ]);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'suspend_business',
             'model_type' => Business::class,
             'model_id' => $business->id,
@@ -257,10 +268,13 @@ class BusinessManagementController extends Controller
 
     public function restore(Business $business, Request $request)
     {
-        $business->update(['status' => 'active']);
+        $business->update([
+            'status' => 'active',
+            'suspended_at' => null,
+        ]);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'restore_business',
             'model_type' => Business::class,
             'model_id' => $business->id,
@@ -289,7 +303,7 @@ class BusinessManagementController extends Controller
         $subscription->save();
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'update_business_plan',
             'model_type' => Business::class,
             'model_id' => $business->id,
@@ -321,7 +335,7 @@ class BusinessManagementController extends Controller
         ]);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'extend_trial',
             'model_type' => Business::class,
             'model_id' => $business->id,
@@ -358,12 +372,12 @@ class BusinessManagementController extends Controller
             'starts_at' => $data['starts_at'] ?? null,
             'ends_at' => $data['ends_at'] ?? null,
             'note' => $data['note'] ?? null,
-            'created_by_admin_id' => $request->user('admin')->id,
+            'created_by_admin_id' => $request->user()->id,
             'is_active' => $data['is_active'] ?? true,
         ]);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'create_business_pricing_override',
             'model_type' => BusinessPricingOverride::class,
             'model_id' => $override->id,
@@ -397,7 +411,7 @@ class BusinessManagementController extends Controller
         $override->update($data);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'update_business_pricing_override',
             'model_type' => BusinessPricingOverride::class,
             'model_id' => $override->id,
@@ -418,7 +432,7 @@ class BusinessManagementController extends Controller
         $override->delete();
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'delete_business_pricing_override',
             'model_type' => BusinessPricingOverride::class,
             'model_id' => $override->id,

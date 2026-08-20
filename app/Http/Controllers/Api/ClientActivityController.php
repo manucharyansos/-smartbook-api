@@ -13,7 +13,7 @@ class ClientActivityController extends Controller
 {
     private function assertBusiness(Client $client, Request $request): void
     {
-        abort_unless((int) $client->business_id === (int) $request->user()->business_id, 403, 'Unauthorized');
+        abort_unless((int) $client->business_id === (int) $request->user()->business_id, 404);
     }
 
     public function storeNote(Client $client, Request $request)

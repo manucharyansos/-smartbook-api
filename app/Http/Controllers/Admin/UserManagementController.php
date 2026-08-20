@@ -44,12 +44,13 @@ class UserManagementController extends Controller
             $query->where('is_active', $request->boolean('is_active'));
         }
 
-        // Sort
-        $sortField = $request->get('sort_by', 'created_at');
-        $sortOrder = $request->get('sort_order', 'desc');
+        $sortField = in_array($request->string('sort_by')->toString(), ['created_at', 'name', 'email', 'role', 'is_active'], true)
+            ? $request->string('sort_by')->toString()
+            : 'created_at';
+        $sortOrder = $request->string('sort_order')->lower()->toString() === 'asc' ? 'asc' : 'desc';
         $query->orderBy($sortField, $sortOrder);
 
-        $users = $query->paginate($request->get('per_page', 20));
+        $users = $query->paginate(max(1, min(100, $request->integer('per_page', 20))));
 
         return response()->json([
             'success' => true,
@@ -105,11 +106,15 @@ class UserManagementController extends Controller
 
         $oldValues = $user->only(array_keys($validated));
 
+        if (array_key_exists('is_active', $validated)) {
+            $validated['deactivated_at'] = $validated['is_active'] ? null : now();
+        }
+
         $user->update($validated);
 
         // Log the action
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => 'update_user',
             'model_type' => User::class,
             'model_id' => $user->id,
@@ -132,14 +137,15 @@ class UserManagementController extends Controller
     public function toggleActive(Request $request, $id)
     {
         $user = User::findOrFail($id);
+        $willBeActive = !$user->is_active;
 
         $user->update([
-            'is_active' => !$user->is_active,
-            'deactivated_at' => $user->is_active ? null : now(),
+            'is_active' => $willBeActive,
+            'deactivated_at' => $willBeActive ? null : now(),
         ]);
 
         AdminLog::create([
-            'admin_id' => $request->user('admin')->id,
+            'admin_id' => $request->user()->id,
             'action' => $user->is_active ? 'activate_user' : 'deactivate_user',
             'model_type' => User::class,
             'model_id' => $user->id,

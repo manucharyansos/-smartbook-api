@@ -8,6 +8,7 @@ use App\Models\Booking;
 use App\Models\Business; // Միայն Business, Salon չկա
 use App\Models\Subscription;
 use App\Models\User;
+use App\Support\BusinessVertical;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -437,10 +438,13 @@ class AdminAnalyticsController extends Controller
 
     private function businessMix(Carbon $start, Carbon $end, ?int $businessId = null): array
     {
+        $businessTypeExpression = "CASE WHEN COALESCE(NULLIF(vertical, ''), business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
+        $bookingBusinessTypeExpression = "CASE WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
+
         $businessRows = Business::query()
-            ->selectRaw('COALESCE(NULLIF(business_type, ""), "other") as business_type, COUNT(*) as total, SUM(CASE WHEN status = "active" THEN 1 ELSE 0 END) as active')
+            ->selectRaw("{$businessTypeExpression} as business_type, COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active")
             ->when($businessId, fn($q) => $q->where('id', $businessId))
-            ->groupBy('business_type')
+            ->groupByRaw($businessTypeExpression)
             ->get()
             ->keyBy('business_type');
 
@@ -449,8 +453,8 @@ class AdminAnalyticsController extends Controller
             ->whereIn('bookings.status', $this->paidStatuses)
             ->whereBetween('bookings.starts_at', [$start, $end])
             ->when($businessId, fn($q) => $q->where('bookings.business_id', $businessId))
-            ->selectRaw('COALESCE(NULLIF(businesses.business_type, ""), "other") as business_type, COUNT(bookings.id) as bookings_count, SUM(bookings.final_price) as revenue')
-            ->groupBy('business_type')
+            ->selectRaw("{$bookingBusinessTypeExpression} as business_type, COUNT(bookings.id) as bookings_count, SUM(bookings.final_price) as revenue")
+            ->groupByRaw($bookingBusinessTypeExpression)
             ->get()
             ->keyBy('business_type');
 
@@ -528,6 +532,7 @@ class AdminAnalyticsController extends Controller
     {
         $validated = $request->validate([
             'status' => 'nullable|in:active,suspended,pending',
+            'business_type' => 'nullable|in:services,healthcare,beauty,dental,salon,clinic',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'search' => 'nullable|string|max:100',
@@ -541,6 +546,21 @@ class AdminAnalyticsController extends Controller
 
         if (!empty($validated['status'])) {
             $query->where('status', $validated['status']);
+        }
+
+        if (!empty($validated['business_type'])) {
+            $vertical = BusinessVertical::normalize($validated['business_type']);
+            $legacyTypes = $vertical === BusinessVertical::HEALTHCARE
+                ? ['healthcare', 'dental', 'clinic']
+                : ['services', 'beauty', 'salon'];
+            $query->where(function ($builder) use ($vertical, $legacyTypes) {
+                $builder->where('vertical', $vertical)
+                    ->orWhere(function ($legacyQuery) use ($legacyTypes) {
+                        $legacyQuery->where(function ($emptyVertical) {
+                            $emptyVertical->whereNull('vertical')->orWhere('vertical', '');
+                        })->whereIn('business_type', $legacyTypes);
+                    });
+            });
         }
 
         if (!empty($validated['from']) && !empty($validated['to'])) {

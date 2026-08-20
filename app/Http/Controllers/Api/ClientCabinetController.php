@@ -13,8 +13,17 @@ class ClientCabinetController extends Controller
     {
         /** @var ClientAccount $account */
         $account = $request->user();
+        abort_unless($account instanceof ClientAccount, 401);
 
-        $linkedClientIds = $account->clientProfiles()->pluck('clients.id');
+        $verifiedEmail = $account->hasVerifiedEmail()
+            ? mb_strtolower(trim((string) $account->email))
+            : null;
+
+        $linkedClientIds = $verifiedEmail
+            ? $account->clientProfiles()
+                ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail])
+                ->pluck('clients.id')
+            : collect();
 
         $bookings = Booking::query()
             ->with([
@@ -22,7 +31,15 @@ class ClientCabinetController extends Controller
                 'service:id,name,duration_minutes,price,currency',
                 'staff:id,name,avatar_url',
             ])
-            ->whereIn('client_id', $linkedClientIds)
+            ->whereIn('bookings.client_id', $linkedClientIds)
+            ->whereExists(function ($query) use ($account, $verifiedEmail) {
+                $query->selectRaw('1')
+                    ->from('clients')
+                    ->whereColumn('clients.id', 'bookings.client_id')
+                    ->whereColumn('clients.business_id', 'bookings.business_id')
+                    ->where('clients.client_account_id', $account->id)
+                    ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail]);
+            })
             ->orderByDesc('starts_at')
             ->get();
 
@@ -65,6 +82,7 @@ class ClientCabinetController extends Controller
             ],
             'meta' => [
                 'linked_profiles' => $linkedClientIds->count(),
+                'requires_email_verification' => !$account->hasVerifiedEmail(),
             ],
         ]);
     }
