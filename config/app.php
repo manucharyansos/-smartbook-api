@@ -56,6 +56,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend URL
+    |--------------------------------------------------------------------------
+    |
+    | Browser-facing links, such as password reset links, must point to the
+    | SPA instead of the API host.
+    |
+    */
+
+    'frontend_url' => env('APP_FRONTEND_URL', env('FRONTEND_APP_URL', 'https://vizit.am')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

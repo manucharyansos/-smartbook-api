@@ -154,12 +154,12 @@ Route::post('/webhooks/payments/idbank/mock-complete', [BillingWebhookController
 |--------------------------------------------------------------------------
 */
 Route::prefix('auth')->group(function () {
-    Route::post('register', [AuthController::class, 'register']);
-    Route::post('login', [AuthController::class, 'login']);
+    Route::post('register', [AuthController::class, 'register'])->middleware('throttle:10,1');
+    Route::post('login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 
     // Password reset (public)
-    Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
-    Route::post('reset-password', [AuthController::class, 'resetPassword']);
+    Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
+    Route::post('reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:10,1');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('me', [AuthController::class, 'me']);
@@ -174,8 +174,10 @@ Route::prefix('auth')->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('client/auth')->group(function () {
-    Route::post('register', [ClientAuthController::class, 'register']);
-    Route::post('login', [ClientAuthController::class, 'login']);
+    Route::post('register', [ClientAuthController::class, 'register'])->middleware('throttle:10,1');
+    Route::post('login', [ClientAuthController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('forgot-password', [ClientAuthController::class, 'forgotPassword'])->middleware('throttle:5,1');
+    Route::post('reset-password', [ClientAuthController::class, 'resetPassword'])->middleware('throttle:10,1');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('me', [ClientAuthController::class, 'me']);
@@ -192,11 +194,17 @@ Route::prefix('client')->middleware('auth:sanctum')->group(function () {
 | Social Auth Redirect Hooks
 |--------------------------------------------------------------------------
 */
+Route::get('/auth/social/providers', [SocialAuthController::class, 'providers'])
+    ->middleware('throttle:60,1')
+    ->name('auth.social.providers');
 Route::get('/auth/social/{provider}/redirect', [SocialAuthController::class, 'redirect'])
+    ->middleware('throttle:20,1')
     ->name('auth.social.redirect');
 Route::get('/auth/social/{provider}/callback', [SocialAuthController::class, 'callback'])
+    ->middleware('throttle:30,1')
     ->name('auth.social.callback');
 Route::post('/auth/social/exchange', [SocialAuthController::class, 'exchange'])
+    ->middleware('throttle:20,1')
     ->name('auth.social.exchange');
 
 /*

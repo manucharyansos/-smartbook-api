@@ -27,6 +27,7 @@ class BookingResource extends JsonResource
 
             'client_name' => $this->client_name,
             'client_phone' => $this->client_phone,
+            'client_email' => $this->contactEmail(),
             'notes' => $this->notes,
             'source' => $this->source,
             'source_meta' => $this->source_meta,

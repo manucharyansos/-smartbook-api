@@ -844,17 +844,20 @@ class PublicBookingController extends Controller
                 'business_id' => $business->id,
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
-                'email'       => $data['client_email'] ?? null,
+                'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
             ]);
         } else {
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
-                $client->email = $data['client_email'];
+                $client->email = Booking::normalizeContactEmail($data['client_email']);
             }
             $client->save();
         }
 
         app(ClientIdentityLinker::class)->linkClientProfile($client);
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? $client->email
+        );
 
         // Generate phone verification code
         $code    = (string) random_int(1000, 9999);
@@ -870,6 +873,7 @@ class PublicBookingController extends Controller
             $business,
             $staff,
             $client,
+            $clientEmailSnapshot,
             $data,
             $startUtc,
             $endUtc,
@@ -891,6 +895,7 @@ class PublicBookingController extends Controller
                 'client_id'    => $client->id,
                 'client_name'  => $data['client_name'],
                 'client_phone' => $client->phone,
+                'client_email' => $clientEmailSnapshot,
                 'notes'        => $data['notes'] ?? null,
                 'source'       => $data['source'] ?? 'website',
                 'status'       => 'pending',
@@ -924,7 +929,7 @@ class PublicBookingController extends Controller
             }
         });
 
-        $this->sendVerificationNotifications($booking, $code, $expires, $data['client_email'] ?? null);
+        $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
 
         return response()->json([
             'data' => [
@@ -1075,18 +1080,21 @@ class PublicBookingController extends Controller
                 'business_id' => $business->id,
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
-                'email'       => $data['client_email'] ?? null,
+                'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
             ]);
         } else {
             // Update client name and email if provided
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
-                $client->email = $data['client_email'];
+                $client->email = Booking::normalizeContactEmail($data['client_email']);
             }
             $client->save();
         }
 
         app(ClientIdentityLinker::class)->linkClientProfile($client);
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? $client->email
+        );
 
         // Generate a common verification code and group id
         $code    = (string) random_int(1000, 9999);
@@ -1099,6 +1107,7 @@ class PublicBookingController extends Controller
             $linesData,
             $business,
             $client,
+            $clientEmailSnapshot,
             $data,
             $code,
             $expires,
@@ -1122,6 +1131,7 @@ class PublicBookingController extends Controller
                     'client_id'    => $client->id,
                     'client_name'  => $data['client_name'],
                     'client_phone' => $client->phone,
+                    'client_email' => $clientEmailSnapshot,
                     'notes'        => $data['notes'] ?? null,
                     'source'       => $data['source'] ?? 'website',
                     'status'       => 'pending',
@@ -1152,7 +1162,7 @@ class PublicBookingController extends Controller
             }
         });
 
-        $this->sendVerificationNotifications($bookings[0], $code, $expires, $data['client_email'] ?? null);
+        $this->sendVerificationNotifications($bookings[0], $code, $expires, $bookings[0]->contactEmail());
 
         return response()->json([
             'data' => [
@@ -1338,18 +1348,21 @@ class PublicBookingController extends Controller
                 'business_id' => $business->id,
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
-                'email'       => $data['client_email'] ?? null,
+                'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
             ]);
         } else {
             // Update client name and email if provided
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
-                $client->email = $data['client_email'];
+                $client->email = Booking::normalizeContactEmail($data['client_email']);
             }
             $client->save();
         }
 
         app(ClientIdentityLinker::class)->linkClientProfile($client);
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? $client->email
+        );
 
         $code = (string)random_int(1000, 9999);
         $expires = now()->addMinutes(10);
@@ -1367,6 +1380,7 @@ class PublicBookingController extends Controller
             'ends_at'       => $endsAtUtc->format('Y-m-d H:i:s'),
             'client_name'   => $data['client_name'],
             'client_phone'  => $phoneNorm,
+            'client_email'  => $clientEmailSnapshot,
             'notes'         => $data['notes'] ?? null,
             'source'        => $data['source'] ?? 'website',
             'status'        => 'pending',
@@ -1384,7 +1398,7 @@ class PublicBookingController extends Controller
 
         $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($service->price ?? 0));
 
-        $this->sendVerificationNotifications($booking, $code, $expires, $data['client_email'] ?? null);
+        $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
 
         return response()->json([
             'data' => [
@@ -1670,7 +1684,7 @@ class PublicBookingController extends Controller
         ]);
 
         $booking->refresh();
-        $email = $booking->client?->email;
+        $email = $booking->contactEmail();
         $this->sendVerificationNotifications($booking, $codeValue, $expires, $email);
 
         return response()->json([
@@ -1774,7 +1788,7 @@ class PublicBookingController extends Controller
             'status_label' => $this->publicStatusLabel($booking->status),
             'client_name' => $booking->client_name,
             'client_phone' => $booking->client_phone,
-            'client_email' => $booking->client?->email,
+            'client_email' => $booking->contactEmail(),
             'notes' => $booking->notes,
             'phone_verified_at' => $booking->phone_verified_at?->toISOString(),
             'guest_access_expires_at' => $booking->guest_access_expires_at?->toISOString(),
@@ -1928,7 +1942,7 @@ class PublicBookingController extends Controller
             ]);
         }
 
-        $targetEmail = $email ?: $booking->client?->email;
+        $targetEmail = $email ?: $booking->contactEmail();
         if ($targetEmail) {
             try {
                 Mail::send('emails.public_booking_verification', [
@@ -1973,7 +1987,7 @@ class PublicBookingController extends Controller
             ]);
         }
 
-        $targetEmail = $booking->client?->email;
+        $targetEmail = $booking->contactEmail();
         if ($targetEmail) {
             try {
                 Mail::send('emails.public_booking_confirmed', [
@@ -2015,7 +2029,7 @@ class PublicBookingController extends Controller
             ]);
         }
 
-        $targetEmail = $booking->client?->email;
+        $targetEmail = $booking->contactEmail();
         if ($targetEmail) {
             try {
                 Mail::send('emails.public_booking_cancelled', [

@@ -40,12 +40,28 @@ return [
         'client_id' => env('GOOGLE_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         'redirect' => env('GOOGLE_REDIRECT_URI', '/api/auth/social/google/callback'),
+        'authorize_url' => env('GOOGLE_AUTHORIZE_URL', 'https://accounts.google.com/o/oauth2/v2/auth'),
+        'token_url' => env('GOOGLE_TOKEN_URL', 'https://oauth2.googleapis.com/token'),
+        'userinfo_url' => env('GOOGLE_USERINFO_URL', 'https://openidconnect.googleapis.com/v1/userinfo'),
     ],
 
     'facebook' => [
         'client_id' => env('FACEBOOK_CLIENT_ID'),
         'client_secret' => env('FACEBOOK_CLIENT_SECRET'),
         'redirect' => env('FACEBOOK_REDIRECT_URI', '/api/auth/social/facebook/callback'),
+        'graph_version' => env('FACEBOOK_GRAPH_VERSION', 'v26.0'),
+        'authorize_url' => sprintf(
+            'https://www.facebook.com/%s/dialog/oauth',
+            env('FACEBOOK_GRAPH_VERSION', 'v26.0')
+        ),
+        'token_url' => sprintf(
+            'https://graph.facebook.com/%s/oauth/access_token',
+            env('FACEBOOK_GRAPH_VERSION', 'v26.0')
+        ),
+        'userinfo_url' => sprintf(
+            'https://graph.facebook.com/%s/me',
+            env('FACEBOOK_GRAPH_VERSION', 'v26.0')
+        ),
     ],
 
     'social_auth' => [

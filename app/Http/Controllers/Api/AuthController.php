@@ -15,6 +15,7 @@ use App\Support\Phone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
@@ -33,11 +34,24 @@ class AuthController extends Controller
             'email' => ['required', 'email'],
         ]);
 
-        $status = Password::sendResetLink(['email' => $data['email']]);
+        try {
+            $email = mb_strtolower(trim($data['email']));
+            $user = User::query()->whereRaw('LOWER(email) = ?', [$email])->first();
+            if ($user) {
+                Password::sendResetLink(['email' => $user->email]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Password reset email could not be sent.', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+        }
 
-        // For security, we always return 200 (do not leak if user exists)
+        // Always return the same response so this endpoint cannot be used to
+        // discover which email addresses have a Vizit account.
         return response()->json([
-            'message' => __($status),
+            'ok' => true,
+            'message' => 'If the account exists, a password reset link has been sent.',
         ]);
     }
 
@@ -52,9 +66,12 @@ class AuthController extends Controller
             'password' => ['required', 'string', 'min:8', 'confirmed'],
         ]);
 
+        $email = mb_strtolower(trim($data['email']));
+        $user = User::query()->whereRaw('LOWER(email) = ?', [$email])->first();
+
         $status = Password::reset(
             [
-                'email' => $data['email'],
+                'email' => $user?->email ?? $email,
                 'password' => $data['password'],
                 'password_confirmation' => $data['password_confirmation'],
                 'token' => $data['token'],
@@ -87,8 +104,9 @@ class AuthController extends Controller
             'password' => ['required','string'],
         ]);
 
+        $email = mb_strtolower(trim($data['email']));
         $user = User::with('business:id,name,slug,is_onboarding_completed,business_type,vertical,business_category_id,custom_category_name')
-            ->where('email', $data['email'])
+            ->whereRaw('LOWER(email) = ?', [$email])
             ->first();
 
         if (!$user || !Hash::check($data['password'], $user->password)) {
@@ -124,6 +142,10 @@ class AuthController extends Controller
 
     public function register(Request $request)
     {
+        if ($request->filled('email')) {
+            $request->merge(['email' => mb_strtolower(trim((string) $request->input('email')))]);
+        }
+
         // Fingerprint should be generated on frontend and passed as header or field.
         $fingerprint = (string)($request->header('X-Device-Fingerprint') ?? $request->input('device_fingerprint') ?? '');
         $fingerprint = trim($fingerprint);

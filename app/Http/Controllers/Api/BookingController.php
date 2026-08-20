@@ -282,6 +282,9 @@ class BookingController extends Controller
             $data['client_id'] ?? null,
             $data['client_email'] ?? null
         );
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? Client::query()->whereKey($clientId)->value('email')
+        );
 
         $booking = null;
 
@@ -293,6 +296,7 @@ class BookingController extends Controller
             $staff,
             $data,
             $clientId,
+            $clientEmailSnapshot,
             $startUtc,
             $endUtc,
             $priceIsNull,
@@ -311,6 +315,7 @@ class BookingController extends Controller
                 'client_id'    => $clientId,
                 'client_name'  => $data['client_name'],
                 'client_phone' => $data['client_phone'],
+                'client_email' => $clientEmailSnapshot,
                 'notes'        => $data['notes'] ?? null,
                 'source'       => $data['source'] ?? 'admin',
                 'status'       => $data['status'] ?? 'pending',
@@ -388,6 +393,9 @@ class BookingController extends Controller
         $step = (int) ($business?->slot_step_minutes ?? 15);
 
         $clientId = $this->resolveClientId($actor, $contextService, $data['client_phone'], $data['client_name'], null, $data['client_email'] ?? null);
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? Client::query()->whereKey($clientId)->value('email')
+        );
         $groupId = (string) Str::uuid();
 
         $cursorLocal = Carbon::createFromFormat('Y-m-d H:i', $data['starts_at'], $tz)->seconds(0);
@@ -399,6 +407,7 @@ class BookingController extends Controller
             $actor,
             $primaryBusinessId,
             $clientId,
+            $clientEmailSnapshot,
             $groupId,
             $data,
             &$cursorLocal,
@@ -448,8 +457,9 @@ class BookingController extends Controller
                     'client_id'    => $clientId,
                     'client_name'  => $data['client_name'],
                     'client_phone' => $data['client_phone'],
+                    'client_email' => $clientEmailSnapshot,
                     'notes'        => $data['notes'] ?? null,
-                'source'       => $data['source'] ?? 'admin',
+                    'source'       => $data['source'] ?? 'admin',
                     'status'       => $data['status'] ?? 'confirmed',
 
                     // ✅ store UTC
@@ -577,10 +587,13 @@ class BookingController extends Controller
             $data['client_id'] ?? null,
             $data['client_email'] ?? null
         );
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? Client::query()->whereKey($clientId)->value('email')
+        );
         $groupId = (string) Str::uuid();
         $created = [];
 
-        DB::transaction(function () use (&$created, $prepared, $groupId, $businessId, $clientId, $data) {
+        DB::transaction(function () use (&$created, $prepared, $groupId, $businessId, $clientId, $clientEmailSnapshot, $data) {
             foreach ($prepared as $row) {
                 /** @var Service $service */
                 $service = $row['service'];
@@ -600,6 +613,7 @@ class BookingController extends Controller
                     'client_id'    => $clientId,
                     'client_name'  => $data['client_name'],
                     'client_phone' => $data['client_phone'],
+                    'client_email' => $clientEmailSnapshot,
                     'notes'        => $data['notes'] ?? null,
                     'source'       => $data['source'] ?? 'admin',
                     'status'       => $data['status'] ?? 'confirmed',
@@ -648,6 +662,7 @@ class BookingController extends Controller
         $data = $request->validate([
             'client_name'  => ['sometimes', 'string', 'max:120'],
             'client_phone' => ['sometimes', 'string', 'max:40'],
+            'client_email' => ['sometimes', 'nullable', 'email', 'max:150'],
             'client_id'    => ['nullable', 'integer', 'exists:clients,id'],
 
             'starts_at'    => ['sometimes', 'date_format:Y-m-d H:i'],
@@ -821,6 +836,10 @@ class BookingController extends Controller
                 service: $resolvedService,
                 staff: $resolvedStaff,
             );
+        }
+
+        if (array_key_exists('client_email', $data)) {
+            $data['client_email'] = Booking::normalizeContactEmail($data['client_email']);
         }
 
         $booking->update($data);
@@ -1013,6 +1032,8 @@ class BookingController extends Controller
 
     private function resolveClientId($actor, ?Service $primaryService, string $phone, string $name, $clientId = null, ?string $email = null): int
     {
+        $email = Booking::normalizeContactEmail($email);
+
         if (!empty($clientId)) {
             $client = Client::query()->findOrFail((int)$clientId);
             if (!$actor->isSuperAdmin() && (int)$client->business_id !== (int)$actor->business_id) abort(404);
@@ -1104,7 +1125,7 @@ class BookingController extends Controller
     private function sendAdminCreatedBookingEmailToClient(Booking $booking): void
     {
         $booking->loadMissing(['business', 'service', 'staff', 'client']);
-        $email = trim((string) ($booking->client?->email ?? ''));
+        $email = trim((string) ($booking->contactEmail() ?? ''));
         if ($email === '') return;
 
         Mail::send('emails.admin_booking_created_for_client', ['booking' => $booking], function ($message) use ($email, $booking) {

@@ -20,6 +20,7 @@ class Booking extends Model
         'room_id',
         'client_name',
         'client_phone',
+        'client_email',
         'starts_at',
         'ends_at',
         'status',
@@ -95,5 +96,22 @@ class Booking extends Model
     public function isPhoneVerified(): bool
     {
         return (bool)$this->phone_verified_at;
+    }
+
+    /**
+     * Booking contact data is an immutable historical snapshot. The migration
+     * backfills legacy bookings once; runtime reads must never follow later
+     * changes made to the shared client profile.
+     */
+    public function contactEmail(): ?string
+    {
+        return self::normalizeContactEmail($this->client_email);
+    }
+
+    public static function normalizeContactEmail(?string $email): ?string
+    {
+        $email = trim((string) $email);
+
+        return $email !== '' ? mb_strtolower($email) : null;
     }
 }

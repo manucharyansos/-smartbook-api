@@ -5,14 +5,22 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ClientAccount;
 use App\Services\ClientIdentityLinker;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class ClientAuthController extends Controller
 {
     public function register(Request $request, ClientIdentityLinker $linker)
     {
+        if ($request->filled('email')) {
+            $request->merge(['email' => $linker->normalizeEmail($request->input('email'))]);
+        }
+
         $data = $request->validate([
             'name' => ['required', 'string', 'min:2', 'max:120'],
             'email' => ['nullable', 'email', 'max:190', 'unique:client_accounts,email'],
@@ -58,7 +66,7 @@ class ClientAuthController extends Controller
         $account = ClientAccount::query()
             ->where(function ($q) use ($email, $phone, $identity) {
                 if ($email) {
-                    $q->orWhere('email', $email);
+                    $q->orWhereRaw('LOWER(email) = ?', [$email]);
                 }
                 if ($phone) {
                     $q->orWhere('phone', $phone);
@@ -83,6 +91,71 @@ class ClientAuthController extends Controller
             'token' => $token,
             'user' => $this->serialize($account),
         ]);
+    }
+
+    public function forgotPassword(Request $request, ClientIdentityLinker $linker)
+    {
+        $data = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        try {
+            $email = $linker->normalizeEmail($data['email']);
+            $account = ClientAccount::query()
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->first();
+
+            if ($account) {
+                Password::broker('clients')->sendResetLink(['email' => $account->email]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Client password reset email could not be sent.', [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'If the account exists, a password reset link has been sent.',
+        ]);
+    }
+
+    public function resetPassword(Request $request, ClientIdentityLinker $linker)
+    {
+        $data = $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+        ]);
+
+        $email = $linker->normalizeEmail($data['email']);
+        $account = ClientAccount::query()
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->first();
+
+        $status = Password::broker('clients')->reset(
+            [
+                'email' => $account?->email ?? $email,
+                'password' => $data['password'],
+                'password_confirmation' => $data['password_confirmation'],
+                'token' => $data['token'],
+            ],
+            function (ClientAccount $clientAccount) use ($data) {
+                $clientAccount->forceFill([
+                    'password' => Hash::make($data['password']),
+                    'remember_token' => Str::random(60),
+                ])->save();
+
+                event(new PasswordReset($clientAccount));
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            return response()->json(['message' => __($status)], 422);
+        }
+
+        return response()->json(['message' => __($status)]);
     }
 
     public function me(Request $request)
