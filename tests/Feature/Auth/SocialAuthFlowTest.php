@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Business;
+use App\Models\BusinessCategory;
 use App\Models\ClientAccount;
 use App\Models\Plan;
 use App\Models\User;
@@ -251,6 +252,15 @@ it('completes Facebook client authentication using the server-side code exchange
 
 it('creates a complete business and primary location through Google registration', function () {
     socialAuthPlan();
+    $category = BusinessCategory::query()->create([
+        'vertical' => 'services',
+        'slug' => 'beauty-salon',
+        'name_hy' => 'Գեղեցկության սրահ',
+        'name_ru' => 'Салон красоты',
+        'name_en' => 'Beauty salon',
+        'is_active' => true,
+        'sort_order' => 10,
+    ]);
 
     Http::fake([
         'https://oauth2.googleapis.com/token' => Http::response([
@@ -315,6 +325,7 @@ it('creates a complete business and primary location through Google registration
         'business_address' => 'Երևան, Ամիրյան փողոց 1',
         'latitude' => 40.179186,
         'longitude' => 44.513134,
+        'business_category_slug' => 'beauty-salon',
     ]);
 
     $exchange
@@ -330,6 +341,7 @@ it('creates a complete business and primary location through Google registration
         'name' => 'Social Beauty Studio',
         'phone' => '+37498408879',
         'address' => 'Երևան, Ամիրյան փողոց 1',
+        'business_category_id' => $category->id,
     ]);
     $this->assertDatabaseHas('business_locations', [
         'business_id' => $businessId,

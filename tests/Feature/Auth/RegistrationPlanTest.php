@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\BusinessCategory;
 use App\Models\Plan;
 use Illuminate\Support\Facades\Mail;
 
@@ -124,4 +125,32 @@ it('requires map coordinates before registration creates a business', function (
         ->assertJsonValidationErrors(['latitude', 'longitude']);
 
     $this->assertDatabaseCount('businesses', 0);
+});
+
+it('stores a category from the selected business area during registration', function () {
+    registrationPlan();
+    $category = BusinessCategory::query()->create([
+        'vertical' => 'healthcare',
+        'slug' => 'diagnostic-center',
+        'name_hy' => 'Ախտորոշիչ կենտրոն',
+        'name_ru' => 'Диагностический центр',
+        'name_en' => 'Diagnostic center',
+        'is_active' => true,
+        'sort_order' => 10,
+    ]);
+
+    $response = $this->postJson('/api/auth/register', registrationPayload([
+        'business_name' => 'Diagnostic Test Center',
+        'business_type' => 'healthcare',
+        'vertical' => 'healthcare',
+        'business_category_slug' => 'diagnostic-center',
+        'email' => 'diagnostic@example.com',
+    ]));
+
+    $response->assertOk();
+    $this->assertDatabaseHas('businesses', [
+        'id' => $response->json('user.business_id'),
+        'vertical' => 'healthcare',
+        'business_category_id' => $category->id,
+    ]);
 });

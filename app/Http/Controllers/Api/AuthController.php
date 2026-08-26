@@ -202,15 +202,37 @@ class AuthController extends Controller
             ]);
         }
 
-        $categoryId = $data['business_category_id'] ?? null;
-        if (!$categoryId && !empty($data['business_category_slug'])) {
-            $categoryId = BusinessCategory::query()
+        $category = null;
+        if (!empty($data['business_category_id'])) {
+            $category = BusinessCategory::query()
+                ->forVertical($vertical)
+                ->whereKey((int) $data['business_category_id'])
+                ->first();
+        } elseif (!empty($data['business_category_slug'])) {
+            $category = BusinessCategory::query()
                 ->forVertical($vertical)
                 ->where('slug', $data['business_category_slug'])
-                ->value('id');
+                ->first();
         }
 
-        $out = DB::transaction(function () use ($data, $phoneNorm, $fingerprint, $request, $trialDays, $vertical, $businessType, $categoryId, $plan) {
+        if ((!empty($data['business_category_id']) || !empty($data['business_category_slug'])) && !$category) {
+            throw ValidationException::withMessages([
+                'business_category_slug' => 'The selected category does not belong to this business area.',
+            ]);
+        }
+
+        $categoryId = $category?->id;
+        $customCategoryName = trim((string) ($data['custom_category_name'] ?? ''));
+        if ($category && str_starts_with($category->slug, 'other-') && $customCategoryName === '') {
+            throw ValidationException::withMessages([
+                'custom_category_name' => 'Please specify the business category.',
+            ]);
+        }
+        $customCategoryName = $category && str_starts_with($category->slug, 'other-')
+            ? $customCategoryName
+            : null;
+
+        $out = DB::transaction(function () use ($data, $phoneNorm, $fingerprint, $request, $trialDays, $vertical, $businessType, $categoryId, $customCategoryName, $plan) {
             // unique slug
             $baseSlug = Str::slug($data['business_name']);
             $slug = $baseSlug ?: 'business';
@@ -226,7 +248,7 @@ class AuthController extends Controller
                 'business_type' => $businessType,
                 'vertical' => $vertical,
                 'business_category_id' => $categoryId,
-                'custom_category_name' => $data['custom_category_name'] ?? null,
+                'custom_category_name' => $customCategoryName,
                 'phone' => $phoneNorm,
                 'address' => $data['business_address'] ?? null,
                 'status' => 'active',

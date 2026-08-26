@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Mail\OwnerRegistered;
 use App\Models\Business;
+use App\Models\BusinessCategory;
 use App\Models\ClientAccount;
 use App\Models\Plan;
 use App\Models\Subscription;
@@ -277,6 +278,9 @@ class SocialAuthController extends Controller
                 'business_address' => ['required', 'string', 'max:255'],
                 'latitude' => ['required', 'numeric', 'between:-90,90'],
                 'longitude' => ['required', 'numeric', 'between:-180,180'],
+                'business_category_id' => ['nullable', 'integer', 'exists:business_categories,id'],
+                'business_category_slug' => ['nullable', 'string', 'max:120'],
+                'custom_category_name' => ['nullable', 'string', 'max:120'],
             ]);
 
             $businessData['business_phone'] = Phone::normalizeAM($businessData['business_phone']);
@@ -463,13 +467,18 @@ class SocialAuthController extends Controller
             ]);
         }
 
-        return DB::transaction(function () use ($registration, $data, $vertical, $plan) {
+        $category = $this->resolveBusinessCategory($data, $vertical);
+        $customCategoryName = $this->validatedCustomCategoryName($data, $category);
+
+        return DB::transaction(function () use ($registration, $data, $vertical, $plan, $category, $customCategoryName) {
             $businessName = trim($data['business_name']);
             $business = Business::query()->create([
                 'name' => $businessName,
                 'slug' => $this->uniqueBusinessSlug($businessName),
                 'business_type' => $vertical,
                 'vertical' => $vertical,
+                'business_category_id' => $category?->id,
+                'custom_category_name' => $customCategoryName,
                 'phone' => $data['business_phone'],
                 'address' => trim($data['business_address']),
                 'status' => 'active',
@@ -568,6 +577,46 @@ class SocialAuthController extends Controller
         return $days >= 1 && $days <= 30 ? $days : 14;
     }
 
+    private function resolveBusinessCategory(array $data, string $vertical): ?BusinessCategory
+    {
+        $category = null;
+        if (!empty($data['business_category_id'])) {
+            $category = BusinessCategory::query()
+                ->forVertical($vertical)
+                ->whereKey((int) $data['business_category_id'])
+                ->first();
+        } elseif (!empty($data['business_category_slug'])) {
+            $category = BusinessCategory::query()
+                ->forVertical($vertical)
+                ->where('slug', trim((string) $data['business_category_slug']))
+                ->first();
+        }
+
+        if ((!empty($data['business_category_id']) || !empty($data['business_category_slug'])) && !$category) {
+            throw ValidationException::withMessages([
+                'business_category_slug' => 'The selected category does not belong to this business area.',
+            ]);
+        }
+
+        return $category;
+    }
+
+    private function validatedCustomCategoryName(array $data, ?BusinessCategory $category): ?string
+    {
+        if (!$category || !str_starts_with($category->slug, 'other-')) {
+            return null;
+        }
+
+        $customCategoryName = trim((string) ($data['custom_category_name'] ?? ''));
+        if ($customCategoryName === '') {
+            throw ValidationException::withMessages([
+                'custom_category_name' => 'Please specify the business category.',
+            ]);
+        }
+
+        return $customCategoryName;
+    }
+
     private function completeBusinessProfile(User $user, array $data): void
     {
         $business = $user->business;
@@ -575,13 +624,26 @@ class SocialAuthController extends Controller
             throw ValidationException::withMessages(['business' => 'Business account-ը չի գտնվել։']);
         }
 
-        DB::transaction(function () use ($business, $user, $data) {
-            $business->forceFill([
+        $hasCategorySelection = !empty($data['business_category_id']) || !empty($data['business_category_slug']);
+        $category = $hasCategorySelection
+            ? $this->resolveBusinessCategory($data, $business->normalizedVertical())
+            : null;
+        $customCategoryName = $hasCategorySelection
+            ? $this->validatedCustomCategoryName($data, $category)
+            : null;
+
+        DB::transaction(function () use ($business, $user, $data, $hasCategorySelection, $category, $customCategoryName) {
+            $businessData = [
                 'name' => trim($data['business_name']),
                 'slug' => $this->uniqueBusinessSlug(trim($data['business_name']), (int) $business->id),
                 'phone' => $data['business_phone'],
                 'address' => trim($data['business_address']),
-            ])->save();
+            ];
+            if ($hasCategorySelection) {
+                $businessData['business_category_id'] = $category?->id;
+                $businessData['custom_category_name'] = $customCategoryName;
+            }
+            $business->forceFill($businessData)->save();
 
             $location = $business->locations()->where('is_primary', true)->first()
                 ?? $business->locations()->orderBy('sort_order')->orderBy('id')->first();
