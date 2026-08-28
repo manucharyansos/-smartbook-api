@@ -6,9 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\Admin;
 use App\Models\AdminLog;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthController extends Controller
 {
@@ -100,7 +102,23 @@ class AuthController extends Controller
     {
         /** @var Admin|null $admin */
         $admin = $request->user();
-        $admin?->currentAccessToken()?->delete();
+
+        $currentToken = $admin?->currentAccessToken();
+        if ($currentToken instanceof PersonalAccessToken) {
+            $currentToken->delete();
+        } elseif ($admin && $request->bearerToken()) {
+            // Resolve the bearer token explicitly as a safe fallback. This also
+            // handles long-lived workers and tests where the guard instance was
+            // resolved before currentAccessToken() was attached to the model.
+            $resolvedToken = PersonalAccessToken::findToken($request->bearerToken());
+            if (
+                $resolvedToken
+                && $resolvedToken->tokenable_type === $admin::class
+                && (int) $resolvedToken->tokenable_id === (int) $admin->id
+            ) {
+                $resolvedToken->delete();
+            }
+        }
 
         if ($admin) {
             AdminLog::query()->create([
@@ -112,6 +130,10 @@ class AuthController extends Controller
                 'user_agent' => $request->userAgent(),
             ]);
         }
+
+        // Never let an already-resolved Sanctum guard retain the revoked token
+        // for a subsequent request in the same application worker.
+        Auth::forgetGuards();
 
         return response()->json(['success' => true, 'ok' => true]);
     }

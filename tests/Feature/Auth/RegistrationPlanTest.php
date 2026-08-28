@@ -129,9 +129,10 @@ it('requires map coordinates before registration creates a business', function (
 
 it('stores a category from the selected business area during registration', function () {
     registrationPlan();
-    $category = BusinessCategory::query()->create([
-        'vertical' => 'healthcare',
+    $category = BusinessCategory::query()->updateOrCreate([
         'slug' => 'diagnostic-center',
+    ], [
+        'vertical' => 'healthcare',
         'name_hy' => 'Ախտորոշիչ կենտրոն',
         'name_ru' => 'Диагностический центр',
         'name_en' => 'Diagnostic center',

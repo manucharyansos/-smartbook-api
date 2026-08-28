@@ -9,6 +9,7 @@ use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\BusinessLocation;
 use App\Models\Client;
+use App\Models\Room;
 use App\Models\Service;
 use App\Models\User;
 use App\Services\AvailabilityService;
@@ -32,6 +33,7 @@ use Illuminate\Support\Facades\DB;
 use App\Support\BusinessVertical;
 use App\Support\InteractsWithOptionalLocationColumns;
 use App\Notifications\NewBookingNotification;
+use App\Notifications\BookingRescheduledNotification;
 
 class PublicBookingController extends Controller
 {
@@ -93,6 +95,13 @@ class PublicBookingController extends Controller
         $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
         if ($excluded) {
             $query->whereNotIn('slug', $excluded);
+        }
+
+        foreach ((array) config('services.public_booking.excluded_slug_prefixes', []) as $prefix) {
+            $prefix = trim((string) $prefix);
+            if ($prefix !== '') {
+                $query->where('slug', 'not like', $prefix . '%');
+            }
         }
 
         return $query;
@@ -719,7 +728,7 @@ class PublicBookingController extends Controller
             'starts_at'     => ['required', 'date_format:Y-m-d H:i'],
             'client_name'   => ['required', 'string', 'min:2', 'max:120'],
             'client_phone'  => ['required', 'string', 'min:5', 'max:40'],
-            'client_email'  => ['nullable','string','email','max:150'],
+            'client_email'  => ['required','string','email','max:150'],
             'notes'         => ['nullable', 'string', 'max:2000'],
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
@@ -958,7 +967,7 @@ class PublicBookingController extends Controller
             'lines.*.starts_at'   => ['required', 'date_format:Y-m-d H:i'],
             'client_name'         => ['required', 'string', 'min:2', 'max:120'],
             'client_phone'        => ['required', 'string', 'min:5', 'max:40'],
-            'client_email'        => ['nullable','string','email','max:150'],
+            'client_email'        => ['required','string','email','max:150'],
             'notes'               => ['nullable', 'string', 'max:2000'],
             'room_id'             => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'         => ['nullable', 'integer'],
@@ -1262,7 +1271,7 @@ class PublicBookingController extends Controller
             'starts_at'     => ['required', 'date_format:Y-m-d H:i'],
             'client_name'   => ['required', 'string', 'min:2', 'max:120'],
             'client_phone'  => ['required', 'string', 'min:5', 'max:40'],
-            'client_email'  => ['nullable', 'string', 'email', 'max:150'],
+            'client_email'  => ['required', 'string', 'email', 'max:150'],
             'notes'         => ['nullable', 'string', 'max:2000'],
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
@@ -1709,6 +1718,211 @@ class PublicBookingController extends Controller
         ]);
     }
 
+    public function rescheduleOptions(string $code, Request $request, AvailabilityService $availability)
+    {
+        $data = $request->validate([
+            'booking_id' => ['nullable', 'integer'],
+            'date' => ['required', 'date_format:Y-m-d'],
+            'staff_id' => ['nullable', 'integer'],
+        ]);
+
+        $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+        $token = (string) ($request->bearerToken() ?: $request->query('token') ?: $request->header('X-Guest-Token'));
+        $this->assertGuestAccess($booking, $token);
+
+        $target = $this->managedPublicBooking($booking, isset($data['booking_id']) ? (int) $data['booking_id'] : null);
+        if (!$this->canReschedulePublicBooking($target)) {
+            return response()->json([
+                'message' => 'This booking can no longer be rescheduled online.',
+                'data' => [],
+                'meta' => [
+                    'booking_id' => $target->id,
+                    'can_reschedule' => false,
+                    'reschedule_cutoff_hours' => $this->rescheduleCutoffHours(),
+                    'reschedule_deadline' => $this->rescheduleDeadline($target),
+                ],
+            ], 422);
+        }
+
+        $target->loadMissing(['business', 'service', 'staff', 'items.service']);
+        $serviceIds = $this->managedBookingServiceIds($target);
+        if (!$serviceIds) {
+            return response()->json(['message' => 'The booking services are unavailable.'], 422);
+        }
+
+        $requestedStaffId = isset($data['staff_id']) ? (int) $data['staff_id'] : null;
+        if ($requestedStaffId) {
+            $staff = User::query()
+                ->whereKey($requestedStaffId)
+                ->where('business_id', $target->business_id)
+                ->when($target->location_id, fn ($query) => $this->applyLocationCompatibility($query, (int) $target->location_id, 'users'))
+                ->where('is_active', true)
+                ->where('is_bookable', true)
+                ->first();
+
+            if (!$staff) {
+                return response()->json(['message' => 'The selected specialist is unavailable.'], 422);
+            }
+        }
+
+        $slots = $availability->slotsForSelection(
+            serviceIds: $serviceIds,
+            date: $data['date'],
+            businessId: (int) $target->business_id,
+            staffId: $requestedStaffId ?: null,
+            locationId: $target->location_id ? (int) $target->location_id : null,
+            excludeBookingIds: [(int) $target->id],
+        );
+
+        $timezone = $target->business?->effectiveTimezone() ?? 'Asia/Yerevan';
+        $currentStart = $target->starts_at?->copy()->timezone($timezone)->format('Y-m-d H:i:s');
+        $earliestStart = Carbon::now($timezone)->addHours($this->rescheduleCutoffHours());
+        $slots = array_values(array_filter($slots, function (array $slot) use ($target, $currentStart, $timezone, $earliestStart) {
+            try {
+                $slotStart = Carbon::createFromFormat('Y-m-d H:i:s', (string) ($slot['starts_at'] ?? ''), $timezone);
+            } catch (\Throwable $exception) {
+                return false;
+            }
+
+            return $slotStart->gte($earliestStart) && !(
+                (int) ($slot['staff_id'] ?? 0) === (int) $target->staff_id
+                && (string) ($slot['starts_at'] ?? '') === (string) $currentStart
+            );
+        }));
+
+        return response()->json([
+            'data' => $slots,
+            'meta' => [
+                'booking_id' => $target->id,
+                'can_reschedule' => true,
+                'reschedule_cutoff_hours' => $this->rescheduleCutoffHours(),
+                'reschedule_deadline' => $this->rescheduleDeadline($target),
+            ],
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+          ->header('Pragma', 'no-cache');
+    }
+
+    public function reschedule(string $code, Request $request)
+    {
+        $data = $request->validate([
+            'booking_id' => ['nullable', 'integer'],
+            'staff_id' => ['required', 'integer'],
+            'starts_at' => ['required', 'date_format:Y-m-d H:i'],
+        ]);
+
+        $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+        $token = (string) ($request->bearerToken() ?: $request->query('token') ?: $request->header('X-Guest-Token'));
+        $this->assertGuestAccess($booking, $token);
+
+        $target = $this->managedPublicBooking($booking, isset($data['booking_id']) ? (int) $data['booking_id'] : null);
+        if (!$this->canReschedulePublicBooking($target)) {
+            return response()->json([
+                'message' => 'This booking can no longer be rescheduled online.',
+                'data' => $this->publicBookingPayload($booking),
+            ], 422);
+        }
+
+        $target->loadMissing(['business', 'service', 'staff', 'items.service']);
+        $business = $target->business;
+        abort_unless($business, 404);
+
+        $staff = User::query()
+            ->whereKey((int) $data['staff_id'])
+            ->where('business_id', $business->id)
+            ->when($target->location_id, fn ($query) => $this->applyLocationCompatibility($query, (int) $target->location_id, 'users'))
+            ->where('is_active', true)
+            ->where('is_bookable', true)
+            ->first();
+        if (!$staff) {
+            return response()->json(['message' => 'The selected specialist is unavailable.'], 422);
+        }
+
+        $serviceIds = $this->managedBookingServiceIds($target);
+        $services = Service::query()
+            ->whereIn('id', $serviceIds)
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->get();
+        if (!$serviceIds || $services->count() !== count($serviceIds)) {
+            return response()->json(['message' => 'The booking services are unavailable.'], 422);
+        }
+
+        $this->assertSingleBookingServicesCompatible($services, $staff, true);
+
+        $duration = $target->starts_at && $target->ends_at
+            ? (int) $target->starts_at->diffInMinutes($target->ends_at)
+            : (int) $services->sum(fn (Service $service) => (int) $service->duration_minutes);
+        if ($duration < 5 || $duration > 600) {
+            return response()->json(['message' => 'The booking duration is invalid.'], 422);
+        }
+
+        $timezone = $business->effectiveTimezone();
+        $step = max(5, min(60, (int) ($business->slot_step_minutes ?? 15)));
+        try {
+            $startLocal = Carbon::createFromFormat('Y-m-d H:i', $data['starts_at'], $timezone)->seconds(0);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Invalid starts_at.'], 422);
+        }
+        if (((int) $startLocal->minute % $step) !== 0) {
+            return response()->json(['message' => 'Choose one of the available time slots.'], 422);
+        }
+        $endLocal = $startLocal->copy()->addMinutes($duration)->seconds(0);
+
+        if ($startLocal->lt(Carbon::now($timezone)->addHours($this->rescheduleCutoffHours()))) {
+            return response()->json([
+                'message' => 'Choose a time outside the online rescheduling cutoff.',
+            ], 422);
+        }
+
+        $this->assertWithinBusinessHours($business, $startLocal, $endLocal);
+
+        $startUtc = $startLocal->copy()->setTimezone('UTC');
+        if (
+            (int) $target->staff_id === (int) $staff->id
+            && $target->starts_at?->equalTo($startUtc)
+        ) {
+            return response()->json([
+                'unchanged' => true,
+                'data' => $this->publicBookingPayload($booking),
+            ]);
+        }
+
+        $oldStart = $target->starts_at?->copy();
+        $oldEnd = $target->ends_at?->copy();
+        $oldStaff = $target->staff;
+
+        $updated = DB::transaction(function () use ($target, $business, $staff, $startLocal, $endLocal) {
+            $locked = Booking::query()->lockForUpdate()->findOrFail($target->id);
+            if (!$this->canReschedulePublicBooking($locked)) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'starts_at' => ['This booking can no longer be rescheduled online.'],
+                ]);
+            }
+
+            $this->checkOverlap((int) $business->id, (int) $staff->id, $startLocal, $endLocal, (int) $locked->id);
+            $this->checkBlocked((int) $business->id, (int) $staff->id, $startLocal, $endLocal);
+            $roomId = $this->resolveRescheduleRoomId($locked, $business, $startLocal, $endLocal);
+
+            $locked->update([
+                'staff_id' => $staff->id,
+                'room_id' => $roomId,
+                'starts_at' => $startLocal->copy()->setTimezone('UTC')->format('Y-m-d H:i:s'),
+                'ends_at' => $endLocal->copy()->setTimezone('UTC')->format('Y-m-d H:i:s'),
+            ]);
+
+            return $locked->fresh(['business.owner', 'service', 'staff', 'client', 'items.service']);
+        });
+
+        $booking->refresh();
+        if ($oldStart && $oldEnd) {
+            $this->sendBookingRescheduledNotifications($booking, $updated, $oldStart, $oldEnd, $oldStaff, $token);
+        }
+
+        return response()->json([
+            'data' => $this->publicBookingPayload($booking),
+        ]);
+    }
+
     public function cancel(string $code, Request $request)
     {
         $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
@@ -1782,6 +1996,16 @@ class PublicBookingController extends Controller
             ? null
             : $related->sum(fn (Booking $item) => (int) ($item->final_price ?? 0));
 
+        $publicBookings = $related->map(function (Booking $item) {
+            $payload = $item
+                ->makeHidden(['phone_verification_code_hash', 'guest_access_token_hash'])
+                ->toArray();
+            $payload['can_reschedule'] = $this->canReschedulePublicBooking($item);
+            $payload['reschedule_deadline'] = $this->rescheduleDeadline($item);
+
+            return $payload;
+        })->values();
+
         return [
             'booking_code' => $booking->booking_code,
             'status' => $booking->status,
@@ -1793,12 +2017,121 @@ class PublicBookingController extends Controller
             'phone_verified_at' => $booking->phone_verified_at?->toISOString(),
             'guest_access_expires_at' => $booking->guest_access_expires_at?->toISOString(),
             'can_cancel' => $this->canCancelPublicBooking($related->first() ?: $booking, $related),
+            'can_reschedule' => $related->contains(fn (Booking $item) => $this->canReschedulePublicBooking($item)),
+            'reschedule_cutoff_hours' => $this->rescheduleCutoffHours(),
             'total_price' => $totalPrice,
             'currency' => $booking->currency ?? $related->first()?->currency,
             'business' => $booking->business,
-            'primary_booking' => $related->first(),
-            'bookings' => $related->values(),
+            'primary_booking' => $publicBookings->first(),
+            'bookings' => $publicBookings,
         ];
+    }
+
+    private function managedPublicBooking(Booking $booking, ?int $bookingId = null): Booking
+    {
+        $query = Booking::query()
+            ->where('business_id', $booking->business_id)
+            ->where('client_id', $booking->client_id)
+            ->when(
+                $booking->group_id,
+                fn ($related) => $related->where('group_id', $booking->group_id),
+                fn ($related) => $related->where('id', $booking->id),
+            );
+
+        if ($bookingId) {
+            $query->whereKey($bookingId);
+        }
+
+        return $query->firstOrFail();
+    }
+
+    private function managedBookingServiceIds(Booking $booking): array
+    {
+        $booking->loadMissing(['items', 'service']);
+        $ids = $booking->items
+            ->pluck('service_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values()
+            ->all();
+
+        if (!$ids && $booking->service_id) {
+            $ids[] = (int) $booking->service_id;
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    private function rescheduleCutoffHours(): int
+    {
+        return max(0, (int) config('services.public_booking.reschedule_cutoff_hours', 12));
+    }
+
+    private function canReschedulePublicBooking(Booking $booking): bool
+    {
+        if (!in_array($booking->status, ['pending', 'confirmed'], true) || !$booking->starts_at) {
+            return false;
+        }
+
+        return now()->addHours($this->rescheduleCutoffHours())->lte($booking->starts_at);
+    }
+
+    private function rescheduleDeadline(Booking $booking): ?string
+    {
+        if (!$booking->starts_at) {
+            return null;
+        }
+
+        return $booking->starts_at
+            ->copy()
+            ->subHours($this->rescheduleCutoffHours())
+            ->toISOString();
+    }
+
+    private function resolveRescheduleRoomId(Booking $booking, Business $business, Carbon $startLocal, Carbon $endLocal): ?int
+    {
+        if (!$business->isHealthcareVertical() || !$booking->room_id) {
+            return $booking->room_id ? (int) $booking->room_id : null;
+        }
+
+        $startUtc = $startLocal->copy()->setTimezone('UTC')->format('Y-m-d H:i:s');
+        $endUtc = $endLocal->copy()->setTimezone('UTC')->format('Y-m-d H:i:s');
+        $busyRoomIds = Booking::query()
+            ->where('business_id', $business->id)
+            ->where('id', '!=', $booking->id)
+            ->whereIn('status', ['pending', 'confirmed'])
+            ->whereNotNull('room_id')
+            ->where('starts_at', '<', $endUtc)
+            ->where('ends_at', '>', $startUtc)
+            ->pluck('room_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $currentRoomIsActive = Room::query()
+            ->whereKey((int) $booking->room_id)
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->exists();
+
+        if ($currentRoomIsActive && !$busyRoomIds->contains((int) $booking->room_id)) {
+            return (int) $booking->room_id;
+        }
+
+        $replacementRoomId = Room::query()
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->whereNotIn('id', $busyRoomIds)
+            ->orderBy('id')
+            ->value('id');
+
+        if (!$replacementRoomId) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'starts_at' => ['No room is available at the selected time.'],
+            ]);
+        }
+
+        return (int) $replacementRoomId;
     }
 
     private function canCancelPublicBooking(Booking $booking, $related = null): bool
@@ -1821,6 +2154,104 @@ class PublicBookingController extends Controller
         }
 
         return now()->lt($firstUpcoming->starts_at);
+    }
+
+    private function sendBookingRescheduledNotifications(
+        Booking $rootBooking,
+        Booking $booking,
+        Carbon $oldStart,
+        Carbon $oldEnd,
+        ?User $oldStaff,
+        string $guestToken,
+    ): void {
+        $booking->loadMissing(['business.owner', 'service', 'staff', 'client', 'items.service']);
+        $targetEmail = $booking->contactEmail();
+
+        if ($targetEmail) {
+            try {
+                Mail::send('emails.public_booking_rescheduled', [
+                    'booking' => $booking,
+                    'oldStart' => $oldStart,
+                    'oldEnd' => $oldEnd,
+                    'oldStaff' => $oldStaff,
+                    'manageLink' => $this->frontendManageUrl($rootBooking, $guestToken),
+                ], function ($message) use ($targetEmail, $booking) {
+                    $message
+                        ->to($targetEmail)
+                        ->subject('Ձեր ամրագրման ժամը փոխվել է • ' . ($booking->business?->name ?? 'Vizit'));
+                });
+            } catch (\Throwable $exception) {
+                \Log::warning('Public booking reschedule customer email failed', [
+                    'booking_id' => $booking->id,
+                    'email' => $targetEmail,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        try {
+            $recipients = collect([$booking->business?->owner, $oldStaff, $booking->staff])
+                ->filter()
+                ->unique('id');
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow(new BookingRescheduledNotification(
+                    booking: $booking,
+                    oldStart: $oldStart,
+                    oldEnd: $oldEnd,
+                    oldStaffName: $oldStaff?->name,
+                ));
+            }
+        } catch (\Throwable $exception) {
+            \Log::warning('Public booking reschedule business email failed', [
+                'booking_id' => $booking->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        try {
+            /** @var TelegramService $telegram */
+            $telegram = app(TelegramService::class);
+            if (!$booking->business || !$telegram->enabled()) {
+                return;
+            }
+
+            $timezone = $booking->business->effectiveTimezone();
+            $oldTime = $oldStart->copy()->timezone($timezone)->format('d.m.Y H:i');
+            $newTime = $booking->starts_at?->copy()->timezone($timezone)->format('d.m.Y H:i') ?? '—';
+            $services = $booking->items->count()
+                ? $booking->items->map(fn ($item) => $item->service?->name)->filter()->implode(', ')
+                : ($booking->service?->name ?? 'Ծառայություն');
+
+            $message = implode("\n", [
+                '🔁 Հաճախորդը փոխել է ամրագրման ժամը',
+                'Բիզնես՝ ' . $booking->business->name,
+                'Կոդ՝ ' . ($rootBooking->booking_code ?: $booking->booking_code),
+                'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
+                'Ծառայություն՝ ' . $services,
+                'Նախկին ժամ՝ ' . $oldTime,
+                'Նոր ժամ՝ ' . $newTime,
+                'Նախկին մասնագետ՝ ' . ($oldStaff?->name ?? '—'),
+                'Նոր մասնագետ՝ ' . ($booking->staff?->name ?? '—'),
+            ]);
+
+            $businessChatIds = $telegram->bookingChatIdsForBusiness($booking->business);
+            $telegram->sendToMany($businessChatIds, $message);
+
+            $staffChatIds = collect([$oldStaff, $booking->staff])
+                ->filter()
+                ->flatMap(fn (User $staff) => $telegram->staffBookingChatIds($staff))
+                ->diff($businessChatIds)
+                ->unique()
+                ->values()
+                ->all();
+            $telegram->sendToMany($staffChatIds, $message);
+        } catch (\Throwable $exception) {
+            \Log::warning('Public booking reschedule Telegram notification failed', [
+                'booking_id' => $booking->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     private function sendBookingTelegramNotifications(Booking $booking, string $event): void
