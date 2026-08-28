@@ -126,6 +126,7 @@ class ClientAuthController extends Controller
             'token' => ['required', 'string'],
             'email' => ['required', 'email'],
             'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+            'password_confirmation' => ['required', 'string'],
         ]);
 
         $email = $linker->normalizeEmail($data['email']);

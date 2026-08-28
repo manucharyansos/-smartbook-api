@@ -90,7 +90,7 @@ it('completes client Google login through a state-protected one-time exchange', 
     expect($contextCookie)->not->toBeNull();
 
     $callback = $this
-        ->withCookie($contextCookie->getName(), $contextCookie->getValue())
+        ->withUnencryptedCookie($contextCookie->getName(), $contextCookie->getValue())
         ->get('/api/auth/social/google/callback?' . http_build_query([
             'code' => 'google-authorization-code',
             'state' => $providerQuery['state'],
@@ -137,11 +137,14 @@ it('rejects a social callback whose state does not match the encrypted context',
         ->first(fn ($cookie) => $cookie->getName() === 'sb_social_auth_ctx');
 
     $callback = $this
-        ->withCookie($contextCookie->getName(), $contextCookie->getValue())
+        ->withUnencryptedCookie($contextCookie->getName(), $contextCookie->getValue())
         ->get('/api/auth/social/google/callback?code=code&state=wrong-state');
 
     $callback->assertRedirect();
-    expect((string) $callback->headers->get('Location'))->toContain('https://vizit.am/auth/social/callback');
+    $location = (string) $callback->headers->get('Location');
+    expect($location)
+        ->toContain('https://vizit.am/auth/social/callback')
+        ->toContain(rawurlencode('Սոցիալական մուտքի անվտանգության ստուգումը չանցավ։ Փորձիր նորից։'));
     Http::assertNothingSent();
 });
 
@@ -178,7 +181,7 @@ it('links and signs in an existing business owner by verified Google email', fun
         ->first(fn ($cookie) => $cookie->getName() === 'sb_social_auth_ctx');
 
     $callback = $this
-        ->withCookie($contextCookie->getName(), $contextCookie->getValue())
+        ->withUnencryptedCookie($contextCookie->getName(), $contextCookie->getValue())
         ->get('/api/auth/social/google/callback?' . http_build_query([
             'code' => 'existing-owner-code',
             'state' => $providerQuery['state'],
@@ -231,7 +234,7 @@ it('completes Facebook client authentication using the server-side code exchange
         ->first(fn ($cookie) => $cookie->getName() === 'sb_social_auth_ctx');
 
     $callback = $this
-        ->withCookie($contextCookie->getName(), $contextCookie->getValue())
+        ->withUnencryptedCookie($contextCookie->getName(), $contextCookie->getValue())
         ->get('/api/auth/social/facebook/callback?' . http_build_query([
             'code' => 'facebook-authorization-code',
             'state' => $providerQuery['state'],
@@ -252,9 +255,10 @@ it('completes Facebook client authentication using the server-side code exchange
 
 it('creates a complete business and primary location through Google registration', function () {
     socialAuthPlan();
-    $category = BusinessCategory::query()->create([
-        'vertical' => 'services',
+    $category = BusinessCategory::query()->updateOrCreate([
         'slug' => 'beauty-salon',
+    ], [
+        'vertical' => 'services',
         'name_hy' => 'Գեղեցկության սրահ',
         'name_ru' => 'Салон красоты',
         'name_en' => 'Beauty salon',
@@ -290,7 +294,7 @@ it('creates a complete business and primary location through Google registration
         ->first(fn ($cookie) => $cookie->getName() === 'sb_social_auth_ctx');
 
     $callback = $this
-        ->withCookie($contextCookie->getName(), $contextCookie->getValue())
+        ->withUnencryptedCookie($contextCookie->getName(), $contextCookie->getValue())
         ->get('/api/auth/social/google/callback?' . http_build_query([
             'code' => 'business-authorization-code',
             'state' => $providerQuery['state'],

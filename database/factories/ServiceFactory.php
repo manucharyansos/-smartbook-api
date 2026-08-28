@@ -6,6 +6,7 @@ namespace Database\Factories;
 use App\Models\Service;
 use App\Models\Business;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Str;
 
 class ServiceFactory extends Factory
 {
@@ -18,7 +19,7 @@ class ServiceFactory extends Factory
 
         return [
             'business_id' => Business::factory(),
-            'name' => $this->faker->randomElement(array_merge($beautyServices, $dentalServices)),
+            'name' => $this->uniqueServiceName(array_merge($beautyServices, $dentalServices)),
             'description' => $this->faker->optional()->sentence(),
             'duration_minutes' => $this->faker->randomElement([15, 30, 45, 60, 90, 120]),
             'price' => $this->faker->numberBetween(2000, 50000),
@@ -31,7 +32,7 @@ class ServiceFactory extends Factory
     public function beauty(): static
     {
         return $this->state(fn (array $attributes) => [
-            'name' => $this->faker->randomElement(['Haircut', 'Coloring', 'Manicure', 'Pedicure', 'Makeup', 'Massage']),
+            'name' => $this->uniqueServiceName(['Haircut', 'Coloring', 'Manicure', 'Pedicure', 'Makeup', 'Massage']),
         ]);
     }
 
@@ -39,7 +40,7 @@ class ServiceFactory extends Factory
     public function dental(): static
     {
         return $this->state(fn (array $attributes) => [
-            'name' => $this->faker->randomElement(['Cleaning', 'Filling', 'Extraction', 'Root Canal', 'Crown']),
+            'name' => $this->uniqueServiceName(['Cleaning', 'Filling', 'Extraction', 'Root Canal', 'Crown']),
         ]);
     }
 
@@ -56,5 +57,14 @@ class ServiceFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'is_active' => false,
         ]);
+    }
+
+    private function uniqueServiceName(array $names): string
+    {
+        return sprintf(
+            '%s %s',
+            $this->faker->randomElement($names),
+            Str::upper(Str::random(8)),
+        );
     }
 }
