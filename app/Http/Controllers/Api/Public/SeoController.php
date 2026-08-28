@@ -32,14 +32,22 @@ class SeoController extends Controller
                 $description = $this->businessDescription($business, $isBooking);
                 $image = $this->absolutePublicImage($business->cover_url ?: $business->logo_url);
 
-                return response()->json($this->payload(
+                $canonicalUrl = $isBooking
+                    ? $base . '/businesses/' . rawurlencode($business->slug)
+                    : $url;
+                $payload = $this->payload(
                     title: $title,
                     description: $description,
                     image: $image,
-                    url: $url,
+                    url: $canonicalUrl,
                     type: 'website',
-                    jsonLd: $this->businessJsonLd($business, $url, $image, $isBooking)
-                ));
+                    jsonLd: $this->businessJsonLd($business, $canonicalUrl, $image, $isBooking),
+                    robots: $isBooking ? 'noindex,follow' : 'index,follow,max-image-preview:large',
+                );
+                $payload['url'] = $url;
+                $payload['canonical'] = $canonicalUrl;
+
+                return response()->json($payload);
             }
         }
 
@@ -75,6 +83,7 @@ class SeoController extends Controller
         $base = $this->frontendBaseUrl();
         $urls = [
             ['loc' => $base . '/', 'priority' => '1.0'],
+            ['loc' => $base . '/business', 'priority' => '0.9'],
             ['loc' => $base . '/features', 'priority' => '0.8'],
             ['loc' => $base . '/pricing', 'priority' => '0.8'],
             ['loc' => $base . '/about', 'priority' => '0.7'],
@@ -90,10 +99,7 @@ class SeoController extends Controller
             ->where('status', 'active')
             ->where('is_onboarding_completed', true);
 
-        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
-        if ($excluded) {
-            $businesses->whereNotIn('slug', $excluded);
-        }
+        $this->applyPublicBusinessExclusions($businesses);
 
         if (Schema::hasColumn('businesses', 'is_public_profile_enabled')) {
             $businesses->where('is_public_profile_enabled', true);
@@ -106,7 +112,6 @@ class SeoController extends Controller
             ->each(function (Business $business) use (&$urls, $base) {
                 $lastmod = optional($business->updated_at)->toDateString();
                 $urls[] = ['loc' => $base . '/businesses/' . rawurlencode($business->slug), 'priority' => '0.8', 'lastmod' => $lastmod];
-                $urls[] = ['loc' => $base . '/book/' . rawurlencode($business->slug), 'priority' => '0.9', 'lastmod' => $lastmod];
             });
 
         $xml = '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
@@ -141,10 +146,7 @@ class SeoController extends Controller
             ->where('status', 'active')
             ->where('is_onboarding_completed', true);
 
-        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
-        if ($excluded) {
-            $query->whereNotIn('slug', $excluded);
-        }
+        $this->applyPublicBusinessExclusions($query);
 
         if (Schema::hasColumn('businesses', 'is_public_profile_enabled')) {
             $query->where('is_public_profile_enabled', true);
@@ -238,6 +240,7 @@ class SeoController extends Controller
     {
         $pages = [
             '/' => ['title' => 'Vizit.am — օնլայն ամրագրում ծառայությունների և բժշկական այցերի համար', 'description' => 'Գտեք ծառայություններն ու բժշկական կենտրոնները, ընտրեք բիզնեսը և ամրագրեք ազատ ժամը Vizit.am-ում։'],
+            '/business' => ['title' => 'Vizit բիզնեսների համար — ամրագրումներ և հաճախորդների կառավարում', 'description' => 'Կառավարեք օնլայն ամրագրումները, օրացույցը, թիմը, ծառայություններն ու հաճախորդներին Vizit-ի մեկ հարթակում։'],
             '/features' => ['title' => 'Vizit-ի հնարավորությունները բիզնեսների համար', 'description' => 'Կառավարեք ամրագրումները, օրացույցը, ծառայությունները, թիմը և հաճախորդներին մեկ հարթակում։'],
             '/pricing' => ['title' => 'Vizit-ի գնային պլանները', 'description' => 'Ընտրեք ձեր բիզնեսի չափին համապատասխան Vizit պլանը և սկսեք 14-օրյա փորձաշրջանը։'],
             '/about' => ['title' => 'Vizit-ի մասին', 'description' => 'Ծանոթացեք Vizit.am օնլայն ամրագրման հարթակին և մեր նպատակին։'],
@@ -252,7 +255,7 @@ class SeoController extends Controller
             '/press' => ['title' => 'Vizit մամուլի կենտրոն', 'description' => 'Vizit-ի մամուլի և բրենդային նյութերը։', 'robots' => 'noindex,follow'],
         ];
 
-        foreach (['/login', '/register', '/forgot-password', '/reset-password', '/business/', '/client/', '/admin', '/app', '/payment-return', '/auth/', '/mock-bank'] as $prefix) {
+        foreach (['/login', '/register', '/forgot-password', '/reset-password', '/business/login', '/business/register', '/client/', '/admin', '/app', '/payment-return', '/auth/', '/mock-bank'] as $prefix) {
             if ($path === rtrim($prefix, '/') || str_starts_with($path, $prefix)) {
                 return [
                     'title' => 'Vizit',
@@ -263,6 +266,21 @@ class SeoController extends Controller
         }
 
         return $pages[$path] ?? null;
+    }
+
+    private function applyPublicBusinessExclusions($query): void
+    {
+        $excluded = array_values(array_filter((array) config('services.public_booking.excluded_slugs', [])));
+        if ($excluded) {
+            $query->whereNotIn('slug', $excluded);
+        }
+
+        foreach ((array) config('services.public_booking.excluded_slug_prefixes', []) as $prefix) {
+            $prefix = trim((string) $prefix);
+            if ($prefix !== '') {
+                $query->where('slug', 'not like', $prefix . '%');
+            }
+        }
     }
 
     private function normalizePath(string $path): string

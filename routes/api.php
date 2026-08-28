@@ -88,6 +88,8 @@ Route::prefix('v1/public')->group(function () {
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
+    Route::get('/bookings/{code}/reschedule-options', [PublicBookingController::class, 'rescheduleOptions'])->middleware('throttle:60,1');
+    Route::post('/bookings/{code}/reschedule', [PublicBookingController::class, 'reschedule'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/cancel', [PublicBookingController::class, 'cancel'])->middleware('throttle:20,1');
 });
 
@@ -115,6 +117,8 @@ Route::prefix('public')->group(function () {
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
+    Route::get('/bookings/{code}/reschedule-options', [PublicBookingController::class, 'rescheduleOptions'])->middleware('throttle:60,1');
+    Route::post('/bookings/{code}/reschedule', [PublicBookingController::class, 'reschedule'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/cancel', [PublicBookingController::class, 'cancel'])->middleware('throttle:20,1');
     Route::get('/businesses', [PublicBookingController::class, 'index']);
 });

@@ -4,6 +4,7 @@ use App\Models\Business;
 
 it('does not list or expose reserved test businesses publicly', function () {
     config()->set('services.public_booking.excluded_slugs', ['test', 'test-2']);
+    config()->set('services.public_booking.excluded_slug_prefixes', ['vizit-e2e-', 'vizit-medical-qa']);
 
     Business::factory()->onboardingCompleted()->create([
         'name' => 'Internal Test Business',
@@ -13,18 +14,32 @@ it('does not list or expose reserved test businesses publicly', function () {
         'is_public_profile_enabled' => true,
     ]);
 
+    Business::factory()->onboardingCompleted()->create([
+        'name' => 'Vizit E2E Services',
+        'slug' => 'vizit-e2e-services-generated',
+        'status' => 'active',
+        'is_public' => true,
+        'is_public_profile_enabled' => true,
+        'is_marketplace_visible' => true,
+    ]);
+
     $this->getJson('/api/public/businesses')
         ->assertOk()
-        ->assertJsonMissing(['slug' => 'test']);
+        ->assertJsonMissing(['slug' => 'test'])
+        ->assertJsonMissing(['slug' => 'vizit-e2e-services-generated']);
 
     $this->getJson('/api/public/businesses/map')
         ->assertOk()
-        ->assertJsonMissing(['slug' => 'test']);
+        ->assertJsonMissing(['slug' => 'test'])
+        ->assertJsonMissing(['slug' => 'vizit-e2e-services-generated']);
 
     $this->getJson('/api/public/businesses/test')
         ->assertNotFound();
 
     $this->getJson('/api/public/businesses/test/services')
+        ->assertNotFound();
+
+    $this->getJson('/api/public/businesses/vizit-e2e-services-generated')
         ->assertNotFound();
 
     $this->getJson('/api/public/seo/meta?path=/businesses/test')

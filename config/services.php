@@ -90,6 +90,14 @@ return [
                 env('APP_ENV', 'production') === 'production' ? 'test,test-2' : ''
             ))
         ))),
+        'excluded_slug_prefixes' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env(
+                'PUBLIC_EXCLUDED_BUSINESS_SLUG_PREFIXES',
+                env('APP_ENV', 'production') === 'production' ? 'vizit-e2e-,vizit-medical-qa' : ''
+            ))
+        ))),
+        'reschedule_cutoff_hours' => max(0, (int) env('PUBLIC_BOOKING_RESCHEDULE_CUTOFF_HOURS', 12)),
     ],
 
     'sms' => [

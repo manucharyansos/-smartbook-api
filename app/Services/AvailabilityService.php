@@ -20,22 +20,23 @@ class AvailabilityService
     /**
      * Backward-compatible single-service helper.
      */
-    public function slotsForDay(int $staffId, int $serviceId, string $date, ?int $businessId = null, ?int $locationId = null): array
+    public function slotsForDay(int $staffId, int $serviceId, string $date, ?int $businessId = null, ?int $locationId = null, array $excludeBookingIds = []): array
     {
-        return $this->slotsForSelection([$serviceId], $date, $businessId, $staffId, $locationId);
+        return $this->slotsForSelection([$serviceId], $date, $businessId, $staffId, $locationId, $excludeBookingIds);
     }
 
     /**
      * Smart availability for one or many services and either one staff member or the whole team.
      */
-    public function slotsForSelection(array $serviceIds, string $date, ?int $businessId = null, ?int $staffId = null, ?int $locationId = null): array
+    public function slotsForSelection(array $serviceIds, string $date, ?int $businessId = null, ?int $staffId = null, ?int $locationId = null, array $excludeBookingIds = []): array
     {
         $serviceIds = array_values(array_unique(array_filter(array_map('intval', $serviceIds), fn ($id) => $id > 0)));
+        $excludeBookingIds = array_values(array_unique(array_filter(array_map('intval', $excludeBookingIds), fn ($id) => $id > 0)));
         if (!$serviceIds) {
             return [];
         }
 
-        $serviceQ = Service::query()->whereIn('id', $serviceIds);
+        $serviceQ = Service::query()->whereIn('id', $serviceIds)->where('is_active', true);
         if ($businessId) {
             $serviceQ->where('business_id', $businessId);
         }
@@ -66,6 +67,7 @@ class AvailabilityService
         $staffQuery = User::query()
             ->where('business_id', $businessId)
             ->where('is_active', true)
+            ->where('is_bookable', true)
             ->whereIn('role', [User::ROLE_STAFF, User::ROLE_MANAGER, User::ROLE_OWNER]);
 
         if ($staffId) {
@@ -82,7 +84,7 @@ class AvailabilityService
 
         $slots = [];
         foreach ($staffMembers as $staff) {
-            $slots = array_merge($slots, $this->buildSlotsForStaffDuration($business, $staff, $date, $totalDuration));
+            $slots = array_merge($slots, $this->buildSlotsForStaffDuration($business, $staff, $date, $totalDuration, $excludeBookingIds));
         }
 
         if (!$slots) {
@@ -100,7 +102,7 @@ class AvailabilityService
         return $this->markRecommendedSlots($slots);
     }
 
-    private function buildSlotsForStaffDuration(Business $business, User $staff, string $date, int $duration): array
+    private function buildSlotsForStaffDuration(Business $business, User $staff, string $date, int $duration, array $excludeBookingIds = []): array
     {
         try {
             $day = Carbon::createFromFormat('Y-m-d', $date)->startOfDay();
@@ -141,6 +143,7 @@ class AvailabilityService
         $busyBookings = Booking::query()
             ->where('business_id', $business->id)
             ->where('staff_id', $staff->id)
+            ->when($excludeBookingIds, fn ($query) => $query->whereNotIn('id', $excludeBookingIds))
             ->where(function ($q) {
                 $q->where('status', 'confirmed')
                     ->orWhere(function ($pending) {

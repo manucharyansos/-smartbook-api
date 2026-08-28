@@ -51,6 +51,17 @@ it('publishes the sales-assisted plan without presenting it as self-serve', func
         ->assertJsonPath('data.0.yearly_offer.enabled', false);
 });
 
+it('publishes only the notification channels that are enabled by default', function () {
+    createPlanForSelection();
+
+    $this->getJson('/api/plans')
+        ->assertOk()
+        ->assertJsonPath('data.0.features.email_notifications', true)
+        ->assertJsonPath('data.0.features.telegram_notifications', true)
+        ->assertJsonPath('data.0.features.sms_reminders', false)
+        ->assertJsonPath('data.0.features.whatsapp_notifications', false);
+});
+
 it('does not activate a custom plan without an active priced offer', function () {
     $business = Business::factory()->onboardingCompleted()->create();
     $owner = User::factory()->owner($business->id)->create();
