@@ -12,7 +12,7 @@ class TelegramConnectionController extends Controller
 {
     public function show(Request $request, TelegramService $telegram): JsonResponse
     {
-        $user = $request->user();
+        $user = $request->user()?->fresh();
         abort_unless($user && $user->business_id, 403);
 
         return response()->json([
@@ -26,7 +26,7 @@ class TelegramConnectionController extends Controller
 
     public function store(Request $request, TelegramLinkService $links): JsonResponse
     {
-        $user = $request->user();
+        $user = $request->user()?->fresh();
         abort_unless($user && $user->business_id, 403);
 
         try {

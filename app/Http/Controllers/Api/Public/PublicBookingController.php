@@ -1859,7 +1859,7 @@ class PublicBookingController extends Controller
     public function show(string $code, Request $request)
     {
         $booking = Booking::query()
-            ->with(['business:id,name,slug,business_type,address,phone,timezone', 'service:id,name,duration_minutes,price,currency', 'staff:id,name', 'items.service:id,name,duration_minutes,price,currency', 'client:id,email'])
+            ->with(['business:id,name,slug,business_type,address,phone,timezone', 'service:id,name,duration_minutes,price,currency', 'staff:id,name', 'items.service:id,name,duration_minutes,price,currency', 'client:id,email,telegram_chat_id'])
             ->where('booking_code', $code)
             ->firstOrFail();
 
