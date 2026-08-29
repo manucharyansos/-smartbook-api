@@ -60,6 +60,8 @@ class ServiceController extends Controller
             'name' => ['required', 'string', 'min:2', 'max:120'],
             'description' => ['nullable', 'string', 'max:2000'],
             'duration_minutes' => ['required', 'integer', 'min:5', 'max:600'],
+            'booking_mode' => ['nullable', 'in:individual,group'],
+            'capacity' => ['nullable', 'integer', 'min:1', 'max:500'],
             'price' => ['nullable', 'numeric', 'min:0'],
             'currency' => ['nullable', 'string', 'max:10'],
             'image_url' => ['nullable', 'string', 'max:2048'],
@@ -90,6 +92,8 @@ class ServiceController extends Controller
             'name' => $data['name'],
             'description' => $data['description'] ?? null,
             'duration_minutes' => (int) $data['duration_minutes'],
+            'booking_mode' => $data['booking_mode'] ?? 'individual',
+            'capacity' => ($data['booking_mode'] ?? 'individual') === 'group' ? (int) ($data['capacity'] ?? 2) : 1,
             'price' => $data['price'] ?? null,
             'currency' => $data['currency'] ?? 'AMD',
             'image_url' => $data['image_url'] ?? null,
@@ -115,6 +119,8 @@ class ServiceController extends Controller
             'name' => ['sometimes', 'required', 'string', 'min:2', 'max:120'],
             'description' => ['nullable', 'string', 'max:2000'],
             'duration_minutes' => ['sometimes', 'required', 'integer', 'min:5', 'max:600'],
+            'booking_mode' => ['sometimes', 'in:individual,group'],
+            'capacity' => ['sometimes', 'integer', 'min:1', 'max:500'],
             'price' => ['nullable', 'numeric', 'min:0'],
             'currency' => ['nullable', 'string', 'max:10'],
             'image_url' => ['nullable', 'string', 'max:2048'],
@@ -127,6 +133,13 @@ class ServiceController extends Controller
         }
 
         $data = $this->withoutUnavailableLocationAttribute($data, 'services');
+
+        $nextMode = $data['booking_mode'] ?? $service->booking_mode ?? 'individual';
+        if ($nextMode === 'individual') {
+            $data['capacity'] = 1;
+        } elseif (!array_key_exists('capacity', $data) && (int) $service->capacity < 2) {
+            $data['capacity'] = 2;
+        }
 
         $business = Business::query()->with('subscription.plan')->findOrFail((int) $service->business_id);
         $wantsActive = array_key_exists('is_active', $data) ? (bool) $data['is_active'] : (bool) $service->is_active;

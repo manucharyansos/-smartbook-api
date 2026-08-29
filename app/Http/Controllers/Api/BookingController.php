@@ -15,6 +15,7 @@ use App\Models\Service;
 use App\Models\User;
 use App\Services\GiftCardService;
 use App\Services\LoyaltyService;
+use App\Services\WaitlistService;
 use App\Notifications\NewBookingNotification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -191,6 +192,9 @@ class BookingController extends Controller
             'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'gift_card_code' => ['nullable', 'string', 'max:40'],
             'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
+            'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
+            'recurrence_frequency' => ['nullable', 'in:weekly,biweekly,monthly'],
+            'recurrence_count' => ['nullable', 'integer', 'min:1', 'max:24'],
         ]);
 
         $actorBusiness = $actor->business;
@@ -214,6 +218,24 @@ class BookingController extends Controller
 
         /** @var Service $primaryService */
         $primaryService = $orderedServices->first();
+
+        $partySize = max(1, (int) ($data['party_size'] ?? 1));
+        $bookingMode = $primaryService->booking_mode ?? 'individual';
+        if ($bookingMode === 'group' && count($serviceIds) !== 1) {
+            throw ValidationException::withMessages(['service_id' => ['Group-capacity services must be booked separately.']]);
+        }
+        if ($bookingMode !== 'group' && $partySize > 1) {
+            throw ValidationException::withMessages(['party_size' => ['This service accepts one customer per booking.']]);
+        }
+        if ($partySize > max(1, (int) ($primaryService->capacity ?? 1))) {
+            throw ValidationException::withMessages(['party_size' => ['The group size exceeds the service capacity.']]);
+        }
+
+        $recurrenceCount = max(1, (int) ($data['recurrence_count'] ?? 1));
+        $recurrenceFrequency = $recurrenceCount > 1 ? ($data['recurrence_frequency'] ?? null) : null;
+        if ($recurrenceCount > 1 && !$recurrenceFrequency) {
+            throw ValidationException::withMessages(['recurrence_frequency' => ['Choose a recurrence frequency.']]);
+        }
 
         foreach ($orderedServices as $svc) {
             if (!$actor->isSuperAdmin() && (int)$svc->business_id !== (int)$actor->business_id) abort(404);
@@ -262,16 +284,29 @@ class BookingController extends Controller
             else $totalPrice += (int)$svc->price;
         }
 
-        $endLocal = $startLocal->copy()->addMinutes($totalDuration)->seconds(0);
+        $occurrences = [];
+        for ($index = 0; $index < $recurrenceCount; $index++) {
+            $occurrenceStart = match ($recurrenceFrequency) {
+                'weekly' => $startLocal->copy()->addWeeks($index),
+                'biweekly' => $startLocal->copy()->addWeeks($index * 2),
+                'monthly' => $startLocal->copy()->addMonthsNoOverflow($index),
+                default => $startLocal->copy(),
+            };
+            $occurrenceEnd = $occurrenceStart->copy()->addMinutes($totalDuration)->seconds(0);
+            $this->assertWithinBusinessHours($business, $occurrenceStart, $occurrenceEnd);
+            $startUtc = $occurrenceStart->copy()->setTimezone('UTC');
+            $endUtc = $occurrenceEnd->copy()->setTimezone('UTC');
 
-        $this->assertWithinBusinessHours($business, $startLocal, $endLocal);
-
-        $startUtc = $startLocal->copy()->setTimezone('UTC');
-        $endUtc   = $endLocal->copy()->setTimezone('UTC');
-
-        // overlap + blocked checks MUST use UTC because DB stores UTC
-        $this->checkOverlap($bookingBusinessId, (int) $staff->id, $startUtc, $endUtc);
-        $this->checkBlocked($bookingBusinessId, (int) $staff->id, $startUtc, $endUtc);
+            if ($bookingMode === 'group') {
+                if (!app(WaitlistService::class)->slotCanFit($business, $primaryService, (int) $staff->id, $startUtc, $endUtc, $partySize)) {
+                    throw ValidationException::withMessages(['starts_at' => ['One of the recurring group sessions has insufficient capacity: ' . $occurrenceStart->format('Y-m-d H:i')]]);
+                }
+            } else {
+                $this->checkOverlap($bookingBusinessId, (int) $staff->id, $startUtc, $endUtc);
+            }
+            $this->checkBlocked($bookingBusinessId, (int) $staff->id, $startUtc, $endUtc);
+            $occurrences[] = ['start' => $startUtc, 'end' => $endUtc];
+        }
 
         // Resolve client once
         $clientId = $this->resolveClientId(
@@ -287,9 +322,12 @@ class BookingController extends Controller
         );
 
         $booking = null;
+        $created = [];
+        $recurrenceId = $recurrenceCount > 1 ? (string) Str::uuid() : null;
 
         DB::transaction(function () use (
             &$booking,
+            &$created,
             $actor,
             $business,
             $primaryService,
@@ -297,20 +335,40 @@ class BookingController extends Controller
             $data,
             $clientId,
             $clientEmailSnapshot,
-            $startUtc,
-            $endUtc,
+            $occurrences,
             $priceIsNull,
             $totalPrice,
             $currency,
             $orderedServices,
             $resolvedLocationId,
-            $bookingBusinessId
+            $bookingBusinessId,
+            $partySize,
+            $bookingMode,
+            $recurrenceId,
+            $recurrenceFrequency,
+            $recurrenceCount
         ) {
-            $bookingData = [
+            User::query()->whereKey($staff->id)->lockForUpdate()->firstOrFail();
+
+            foreach ($occurrences as $occurrenceIndex => $occurrence) {
+                if ($bookingMode === 'group') {
+                    if (!app(WaitlistService::class)->slotCanFit($business, $primaryService, (int) $staff->id, $occurrence['start'], $occurrence['end'], $partySize)) {
+                        throw ValidationException::withMessages(['starts_at' => ['A recurring session was just taken. Please refresh and try again.']]);
+                    }
+                } else {
+                    $this->checkOverlap($bookingBusinessId, (int) $staff->id, $occurrence['start'], $occurrence['end']);
+                }
+
+                $bookingData = [
                 'business_id'  => $bookingBusinessId,
                 'location_id'  => $resolvedLocationId,
                 'service_id'   => (int)$primaryService->id,
                 'staff_id'     => (int)$staff->id,
+                'party_size'   => $partySize,
+                'recurrence_id' => $recurrenceId,
+                'recurrence_frequency' => $recurrenceFrequency,
+                'recurrence_index' => $occurrenceIndex + 1,
+                'recurrence_count' => $recurrenceCount,
 
                 'client_id'    => $clientId,
                 'client_name'  => $data['client_name'],
@@ -321,38 +379,45 @@ class BookingController extends Controller
                 'status'       => $data['status'] ?? 'pending',
 
                 // ✅ store UTC
-                'starts_at'    => $startUtc->format('Y-m-d H:i:s'),
-                'ends_at'      => $endUtc->format('Y-m-d H:i:s'),
+                'starts_at'    => $occurrence['start']->format('Y-m-d H:i:s'),
+                'ends_at'      => $occurrence['end']->format('Y-m-d H:i:s'),
 
-                'final_price'  => $priceIsNull ? null : $totalPrice,
+                'final_price'  => $priceIsNull ? null : $totalPrice * $partySize,
                 'currency'     => $currency,
                 'booking_code' => $this->generateBookingCode(),
-            ];
+                ];
 
-            if ($business?->isDental() && !empty($data['room_id'])) {
-                $bookingData['room_id'] = (int)$data['room_id'];
+                if ($business?->isDental() && !empty($data['room_id'])) {
+                    $bookingData['room_id'] = (int)$data['room_id'];
+                }
+
+                $currentBooking = Booking::create($bookingData);
+                $booking ??= $currentBooking;
+                $created[] = $currentBooking;
+
+                foreach ($orderedServices as $idx => $svc) {
+                    BookingItem::create([
+                        'booking_id'       => $currentBooking->id,
+                        'service_id'       => (int)$svc->id,
+                        'position'         => (int)$idx,
+                        'duration_minutes' => (int)$svc->duration_minutes,
+                        'price'            => $svc->price,
+                        'currency'         => $svc->currency ?? $currency,
+                    ]);
+                }
+
+                if ($occurrenceIndex === 0) {
+                    $this->applyBookingBenefitsFromPayload($actor, $currentBooking, $data, $clientId, $priceIsNull ? null : $totalPrice * $partySize);
+                }
             }
-
-            $booking = Booking::create($bookingData);
-
-            foreach ($orderedServices as $idx => $svc) {
-                BookingItem::create([
-                    'booking_id'       => $booking->id,
-                    'service_id'       => (int)$svc->id,
-                    'position'         => (int)$idx,
-                    'duration_minutes' => (int)$svc->duration_minutes,
-                    'price'            => $svc->price,
-                    'currency'         => $svc->currency ?? $currency,
-                ]);
-            }
-
-            $this->applyBookingBenefitsFromPayload($actor, $booking, $data, $clientId, $priceIsNull ? null : $totalPrice);
         });
 
         $this->safeNotifyNewBooking($booking);
 
         return response()->json([
-            'data' => new BookingResource($booking->fresh()->load(['service', 'staff', 'business', 'location', 'items.service']))
+            'data' => new BookingResource($booking->fresh()->load(['service', 'staff', 'business', 'location', 'items.service'])),
+            'recurrence' => BookingResource::collection(collect($created)->map(fn (Booking $item) => $item->fresh()->load(['service', 'staff', 'business', 'location', 'items.service']))),
+            'recurrence_id' => $recurrenceId,
         ], 201);
     }
 
@@ -886,6 +951,12 @@ class BookingController extends Controller
         $booking->update(['status' => 'no_show']);
 
         try {
+            app(WaitlistService::class)->offerFreedSlot($booking);
+        } catch (\Throwable $e) {
+            Log::warning('Automatic waitlist offer failed after no-show', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+        }
+
+        try {
             app(LoyaltyService::class)->reverseRedeemedForBooking($actor, $booking);
             app(GiftCardService::class)->restoreForBooking($actor, $booking);
         } catch (\Throwable $e) {}
@@ -908,6 +979,12 @@ class BookingController extends Controller
         $booking->update(['status' => 'cancelled']);
 
         try {
+            app(WaitlistService::class)->offerFreedSlot($booking);
+        } catch (\Throwable $e) {
+            Log::warning('Automatic waitlist offer failed after cancellation', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+        }
+
+        try {
             app(LoyaltyService::class)->reverseRedeemedForBooking($actor, $booking);
             app(GiftCardService::class)->restoreForBooking($actor, $booking);
         } catch (\Throwable $e) {}
@@ -918,6 +995,45 @@ class BookingController extends Controller
             'data' => new BookingResource(
                 $booking->fresh()->load(['service', 'staff', 'business', 'location', 'client', 'room', 'items.service'])
             ),
+        ]);
+    }
+
+    public function cancelRecurrence(Request $request, Booking $booking)
+    {
+        $actor = $request->user();
+        if (!$actor) abort(401);
+        if (!$actor->isSuperAdmin() && (int) $booking->business_id !== (int) $actor->business_id) abort(404);
+        if ($actor->role === User::ROLE_STAFF && (int) $booking->staff_id !== (int) $actor->id) abort(403);
+        if (!$booking->recurrence_id) {
+            throw ValidationException::withMessages(['booking' => ['This booking is not part of a recurring series.']]);
+        }
+        $data = $request->validate(['scope' => ['nullable', 'in:future,all']]);
+        $query = Booking::query()
+            ->with(['business', 'service'])
+            ->where('business_id', $booking->business_id)
+            ->where('recurrence_id', $booking->recurrence_id)
+            ->whereIn('status', ['pending', 'confirmed']);
+        if (($data['scope'] ?? 'future') === 'future') {
+            $query->where('starts_at', '>=', $booking->starts_at);
+        }
+        $items = $query->orderBy('starts_at')->get();
+        Booking::query()->whereIn('id', $items->pluck('id'))->update(['status' => 'cancelled']);
+
+        foreach ($items as $item) {
+            $item->status = 'cancelled';
+            try {
+                app(LoyaltyService::class)->reverseRedeemedForBooking($actor, $item);
+                app(GiftCardService::class)->restoreForBooking($actor, $item);
+                app(WaitlistService::class)->offerFreedSlot($item);
+            } catch (\Throwable $exception) {
+                Log::warning('Recurring cancellation follow-up failed', ['booking_id' => $item->id, 'error' => $exception->getMessage()]);
+            }
+        }
+
+        return response()->json([
+            'ok' => true,
+            'cancelled_booking_ids' => $items->pluck('id')->values(),
+            'recurrence_id' => $booking->recurrence_id,
         ]);
     }
 
@@ -992,13 +1108,40 @@ class BookingController extends Controller
         $startsUtc = $startsLocal->copy()->setTimezone('UTC');
         $endsUtc   = $endsLocal->copy()->setTimezone('UTC');
 
-        $this->checkOverlap((int) $booking->business_id, (int) $booking->staff_id, $startsUtc, $endsUtc, (int) $booking->id);
-        $this->checkBlocked((int) $booking->business_id, (int) $booking->staff_id, $startsUtc, $endsUtc);
+        $oldStart = null;
+        $oldEnd = null;
+        $oldStaffId = (int) $booking->staff_id;
+        $booking = DB::transaction(function () use ($booking, $business, $startsUtc, $endsUtc, &$oldStart, &$oldEnd, &$oldStaffId) {
+            User::query()->whereKey((int) $booking->staff_id)->lockForUpdate()->firstOrFail();
+            $locked = Booking::query()->with('service')->lockForUpdate()->findOrFail($booking->id);
+            $oldStart = $locked->starts_at?->copy();
+            $oldEnd = $locked->ends_at?->copy();
+            $oldStaffId = (int) $locked->staff_id;
 
-        $booking->update([
-            'starts_at' => $startsUtc->format('Y-m-d H:i:s'),
-            'ends_at'   => $endsUtc->format('Y-m-d H:i:s'),
-        ]);
+            if (($locked->service?->booking_mode ?? 'individual') === 'group') {
+                if (!app(WaitlistService::class)->slotCanFit($business, $locked->service, (int) $locked->staff_id, $startsUtc, $endsUtc, max(1, (int) $locked->party_size), (int) $locked->id)) {
+                    throw ValidationException::withMessages(['starts_at' => ['The selected group session has insufficient capacity.']]);
+                }
+            } else {
+                $this->checkOverlap((int) $locked->business_id, (int) $locked->staff_id, $startsUtc, $endsUtc, (int) $locked->id);
+            }
+            $this->checkBlocked((int) $locked->business_id, (int) $locked->staff_id, $startsUtc, $endsUtc);
+
+            $locked->update([
+                'starts_at' => $startsUtc->format('Y-m-d H:i:s'),
+                'ends_at' => $endsUtc->format('Y-m-d H:i:s'),
+            ]);
+
+            return $locked->fresh();
+        });
+
+        if ($oldStart && $oldEnd) {
+            try {
+                app(WaitlistService::class)->offerFreedSlot($booking, $oldStart, $oldEnd, $oldStaffId);
+            } catch (\Throwable $e) {
+                Log::warning('Automatic waitlist offer failed after booking move', ['booking_id' => $booking->id, 'error' => $e->getMessage()]);
+            }
+        }
 
         return response()->json([
             'ok' => true,

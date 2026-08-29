@@ -7,6 +7,8 @@ use App\Models\GiftCard;
 use App\Models\GiftCardLedger;
 use App\Models\User;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 class GiftCardService
 {
@@ -25,10 +27,14 @@ class GiftCardService
             'currency' => $data['currency'] ?? 'AMD',
             'issued_to_name' => $data['issued_to_name'] ?? null,
             'issued_to_phone' => $data['issued_to_phone'] ?? null,
+            'issued_to_email' => isset($data['issued_to_email']) ? mb_strtolower(trim($data['issued_to_email'])) : null,
             'purchased_by_name' => $data['purchased_by_name'] ?? null,
             'purchased_by_phone' => $data['purchased_by_phone'] ?? null,
+            'purchased_by_email' => isset($data['purchased_by_email']) ? mb_strtolower(trim($data['purchased_by_email'])) : null,
             'expires_at' => $data['expires_at'] ?? null,
             'notes' => $data['notes'] ?? null,
+            'delivery_message' => $data['delivery_message'] ?? null,
+            'delivery_status' => 'not_requested',
             'status' => 'active',
         ]);
 
@@ -43,6 +49,39 @@ class GiftCardService
         ]);
 
         return $giftCard;
+    }
+
+    public function deliver(User $actor, GiftCard $giftCard): GiftCard
+    {
+        $giftCard->loadMissing('business');
+        $email = trim((string) $giftCard->issued_to_email);
+        if ($email === '') {
+            throw ValidationException::withMessages(['issued_to_email' => 'Recipient email is required.']);
+        }
+
+        $expires = $giftCard->expires_at?->timezone($giftCard->business?->effectiveTimezone() ?? 'Asia/Yerevan')->format('d.m.Y') ?: 'անսահմանափակ';
+        $body = implode("\n\n", array_filter([
+            'Բարև ' . ($giftCard->issued_to_name ?: '') . ',',
+            ($giftCard->business?->name ?? 'Vizit') . '-ից ձեզ նվեր քարտ է ուղարկվել։',
+            $giftCard->delivery_message,
+            'Կոդ՝ ' . $giftCard->code . "\nԳումար՝ " . number_format((int) $giftCard->balance, 0, '.', ' ') . ' ' . $giftCard->currency . "\nՎավեր է մինչև՝ " . $expires,
+        ]));
+
+        try {
+            Mail::raw($body, function ($message) use ($giftCard, $email) {
+                $message->to($email)->subject('Ձեր նվեր քարտը • ' . ($giftCard->business?->name ?? 'Vizit'));
+            });
+            $giftCard->update(['delivery_status' => 'sent', 'delivered_at' => now()]);
+        } catch (\Throwable $exception) {
+            $giftCard->update(['delivery_status' => 'failed']);
+            Log::warning('Gift card delivery failed', [
+                'gift_card_id' => $giftCard->id,
+                'error' => $exception->getMessage(),
+            ]);
+            throw ValidationException::withMessages(['issued_to_email' => 'The gift card email could not be delivered.']);
+        }
+
+        return $giftCard->fresh();
     }
 
     public function lookupActiveByCode(int $businessId, string $code): GiftCard

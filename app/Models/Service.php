@@ -16,6 +16,8 @@ class Service extends Model
         'description',
         'image_url',
         'duration_minutes',
+        'booking_mode',
+        'capacity',
         'price',
         'is_active',
         'currency',
@@ -25,6 +27,7 @@ class Service extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'capacity' => 'integer',
     ];
 
     public function business() // Փոխել salon() -ից business()

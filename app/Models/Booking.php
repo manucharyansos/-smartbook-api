@@ -12,6 +12,11 @@ class Booking extends Model
     protected $fillable = [
         'booking_code',
         'group_id',
+        'party_size',
+        'recurrence_id',
+        'recurrence_frequency',
+        'recurrence_index',
+        'recurrence_count',
         'business_id',
         'location_id',
         'service_id',
@@ -44,6 +49,9 @@ class Booking extends Model
 
     protected $casts = [
         'location_id' => 'integer',
+        'party_size' => 'integer',
+        'recurrence_index' => 'integer',
+        'recurrence_count' => 'integer',
         'starts_at' => 'datetime',
         'ends_at' => 'datetime',
         'treatment_codes' => 'array',

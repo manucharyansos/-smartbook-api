@@ -28,6 +28,8 @@ use App\Http\Controllers\Api\LoyaltyController;
 use App\Http\Controllers\Api\GiftCardController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\WaitlistController;
+use App\Http\Controllers\Api\MarketingCampaignController;
 
 use App\Http\Controllers\Api\BillingInvoiceController;
 
@@ -85,6 +87,9 @@ Route::prefix('v1/public')->group(function () {
     Route::post('/businesses/{slug}/bookings', [PublicBookingController::class, 'store'])->middleware('throttle:20,1');
     Route::post('/businesses/{slug}/bookings/multi', [PublicBookingController::class, 'storeMulti'])->middleware('throttle:20,1');
     Route::post('/businesses/{slug}/bookings/lines', [PublicBookingController::class, 'storeLines'])->middleware('throttle:20,1');
+    Route::post('/businesses/{slug}/waitlist', [WaitlistController::class, 'publicStore'])->middleware('throttle:10,1');
+    Route::get('/businesses/{slug}/waitlist/offers/{entry}', [WaitlistController::class, 'publicOffer'])->middleware('throttle:30,1');
+    Route::post('/businesses/{slug}/waitlist/offers/{entry}/accept', [WaitlistController::class, 'publicAccept'])->middleware('throttle:10,1');
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
@@ -114,6 +119,9 @@ Route::prefix('public')->group(function () {
     Route::post('/businesses/{slug}/bookings/multi', [PublicBookingController::class, 'storeMulti'])->middleware('throttle:20,1');
     // Multi-line bookings where each service can have its own staff/time
     Route::post('/businesses/{slug}/bookings/lines', [PublicBookingController::class, 'storeLines'])->middleware('throttle:20,1');
+    Route::post('/businesses/{slug}/waitlist', [WaitlistController::class, 'publicStore'])->middleware('throttle:10,1');
+    Route::get('/businesses/{slug}/waitlist/offers/{entry}', [WaitlistController::class, 'publicOffer'])->middleware('throttle:30,1');
+    Route::post('/businesses/{slug}/waitlist/offers/{entry}/accept', [WaitlistController::class, 'publicAccept'])->middleware('throttle:10,1');
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
@@ -122,6 +130,9 @@ Route::prefix('public')->group(function () {
     Route::post('/bookings/{code}/cancel', [PublicBookingController::class, 'cancel'])->middleware('throttle:20,1');
     Route::get('/businesses', [PublicBookingController::class, 'index']);
 });
+
+Route::post('/public/marketing/unsubscribe/{delivery}', [MarketingCampaignController::class, 'unsubscribe'])
+    ->middleware('throttle:10,1');
 
 /*
 |--------------------------------------------------------------------------
@@ -342,10 +353,27 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
     Route::patch('/bookings/{booking}/done', [BookingController::class, 'done'])->name('bookings.done');
     Route::patch('/bookings/{booking}/no-show', [BookingController::class, 'noShow'])->name('bookings.no_show');
     Route::patch('/bookings/{booking}/cancel', [BookingController::class, 'cancel'])->name('bookings.cancel');
+    Route::patch('/bookings/{booking}/recurrence/cancel', [BookingController::class, 'cancelRecurrence'])->name('bookings.recurrence.cancel');
     Route::patch('/bookings/{booking}/confirm', [BookingController::class, 'confirm'])->name('bookings.confirm');
     Route::patch('/bookings/{booking}/time', [BookingController::class, 'updateTime'])->name('bookings.time');
     Route::post('/bookings/multi', [BookingController::class, 'storeMulti'])->name('bookings.storeMulti');
     Route::post('/bookings/lines', [BookingController::class, 'storeLines'])->name('bookings.storeLines');
+
+    Route::middleware(['ensure.feature:waitlist', 'role:owner,manager'])->group(function () {
+        Route::get('/waitlist', [WaitlistController::class, 'index'])->name('waitlist.index');
+        Route::post('/waitlist/{entry}/offer', [WaitlistController::class, 'offer'])->name('waitlist.offer');
+        Route::patch('/waitlist/{entry}', [WaitlistController::class, 'update'])->name('waitlist.update');
+    });
+
+    Route::middleware(['ensure.feature:marketing', 'role:owner,manager'])->group(function () {
+        Route::get('/marketing/campaigns', [MarketingCampaignController::class, 'index'])->name('marketing.campaigns.index');
+        Route::post('/marketing/campaigns', [MarketingCampaignController::class, 'store'])->name('marketing.campaigns.store');
+        Route::put('/marketing/campaigns/{campaign}', [MarketingCampaignController::class, 'update'])->name('marketing.campaigns.update');
+        Route::get('/marketing/campaigns/{campaign}/preview', [MarketingCampaignController::class, 'preview'])->name('marketing.campaigns.preview');
+        Route::post('/marketing/campaigns/{campaign}/send', [MarketingCampaignController::class, 'send'])->name('marketing.campaigns.send');
+        Route::post('/marketing/campaigns/{campaign}/cancel', [MarketingCampaignController::class, 'cancel'])->name('marketing.campaigns.cancel');
+        Route::get('/marketing/campaigns/{campaign}/deliveries', [MarketingCampaignController::class, 'deliveries'])->name('marketing.campaigns.deliveries');
+    });
     /*
     |--------------------------------------------------------------------------
     | Calendar
@@ -471,6 +499,7 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
         Route::get('/loyalty/program', [LoyaltyController::class, 'program'])->name('loyalty.program.show');
         Route::put('/loyalty/program', [LoyaltyController::class, 'updateProgram'])->name('loyalty.program.update');
         Route::get('/loyalty/clients', [LoyaltyController::class, 'clients'])->name('loyalty.clients.index');
+        Route::get('/loyalty/summary', [LoyaltyController::class, 'summary'])->name('loyalty.summary');
         Route::get('/loyalty/clients/{client}/ledger', [LoyaltyController::class, 'clientLedger'])->name('loyalty.clients.ledger');
         Route::post('/loyalty/preview', [LoyaltyController::class, 'preview'])->name('loyalty.preview');
         Route::post('/loyalty/clients/{client}/adjust', [LoyaltyController::class, 'adjust'])->name('loyalty.clients.adjust');
@@ -490,6 +519,7 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
         Route::put('/gift-cards/{giftCard}', [GiftCardController::class, 'update'])->name('giftcards.update');
         Route::patch('/gift-cards/{giftCard}/redeem', [GiftCardController::class, 'redeem'])->name('giftcards.redeem');
         Route::patch('/gift-cards/{giftCard}/adjust', [GiftCardController::class, 'adjust'])->name('giftcards.adjust');
+        Route::post('/gift-cards/{giftCard}/deliver', [GiftCardController::class, 'deliver'])->name('giftcards.deliver');
     });
 });
 

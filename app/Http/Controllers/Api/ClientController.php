@@ -152,6 +152,7 @@ class ClientController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'phone' => ['nullable', 'string', 'max:40'],
             'email' => ['nullable', 'email', 'max:255'],
+            'marketing_opt_in' => ['sometimes', 'boolean'],
             'notes' => ['nullable', 'string'],
             'group_name' => ['nullable', 'string', 'max:255'],
             'is_vip' => ['sometimes', 'boolean'],
@@ -168,6 +169,11 @@ class ClientController extends Controller
         $data['business_id'] = $business->id;
         $data['is_vip'] = (bool) ($data['is_vip'] ?? false);
         $data['is_blacklisted'] = (bool) ($data['is_blacklisted'] ?? false);
+        $data['marketing_opt_in'] = (bool) ($data['marketing_opt_in'] ?? false);
+        if ($data['marketing_opt_in']) {
+            $data['marketing_opted_in_at'] = now();
+            $data['marketing_unsubscribed_at'] = null;
+        }
         if (!$data['is_blacklisted']) {
             $data['blacklist_reason'] = null;
         }
@@ -383,6 +389,7 @@ class ClientController extends Controller
             'name' => ['sometimes', 'string', 'max:255'],
             'phone' => ['nullable', 'string', 'max:40'],
             'email' => ['nullable', 'email', 'max:255'],
+            'marketing_opt_in' => ['sometimes', 'boolean'],
             'notes' => ['nullable', 'string'],
             'group_name' => ['nullable', 'string', 'max:255'],
             'is_vip' => ['sometimes', 'boolean'],
@@ -398,6 +405,10 @@ class ClientController extends Controller
 
         if (array_key_exists('is_blacklisted', $data) && !$data['is_blacklisted']) {
             $data['blacklist_reason'] = null;
+        }
+        if (array_key_exists('marketing_opt_in', $data)) {
+            $data['marketing_opted_in_at'] = $data['marketing_opt_in'] ? now() : $client->marketing_opted_in_at;
+            $data['marketing_unsubscribed_at'] = $data['marketing_opt_in'] ? null : now();
         }
 
         $client->update($data);
@@ -461,6 +472,9 @@ class ClientController extends Controller
             'name' => $client->name,
             'phone' => $client->phone,
             'email' => $client->email,
+            'marketing_opt_in' => (bool) $client->marketing_opt_in,
+            'marketing_opted_in_at' => $client->marketing_opted_in_at?->toISOString(),
+            'marketing_unsubscribed_at' => $client->marketing_unsubscribed_at?->toISOString(),
             'notes' => $client->notes,
             'group_name' => $client->group_name,
             'is_vip' => (bool) $client->is_vip,

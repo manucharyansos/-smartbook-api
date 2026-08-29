@@ -16,6 +16,9 @@ class Client extends Model
         'name',
         'phone',
         'email',
+        'marketing_opt_in',
+        'marketing_opted_in_at',
+        'marketing_unsubscribed_at',
         'notes',
         'birth_date',
         'blood_type',
@@ -35,6 +38,9 @@ class Client extends Model
         'medical_notes' => 'array',
         'is_vip' => 'boolean',
         'is_blacklisted' => 'boolean',
+        'marketing_opt_in' => 'boolean',
+        'marketing_opted_in_at' => 'datetime',
+        'marketing_unsubscribed_at' => 'datetime',
     ];
 
     public function clientAccount()
@@ -59,7 +65,7 @@ class Client extends Model
 
     public function loyaltyBalance(): int
     {
-        return (int) $this->loyaltyLedger()->sum('delta_points');
+        return app(\App\Services\LoyaltyService::class)->getClientBalance((int) $this->business_id, (int) $this->id);
     }
 
     public function clientNotes()

@@ -57,8 +57,12 @@ class GiftCardController extends Controller
             'currency' => ['nullable', 'string', 'max:8'],
             'issued_to_name' => ['nullable', 'string', 'max:120'],
             'issued_to_phone' => ['nullable', 'string', 'max:40'],
+            'issued_to_email' => ['nullable', 'email', 'max:150'],
             'purchased_by_name' => ['nullable', 'string', 'max:120'],
             'purchased_by_phone' => ['nullable', 'string', 'max:40'],
+            'purchased_by_email' => ['nullable', 'email', 'max:150'],
+            'delivery_message' => ['nullable', 'string', 'max:2000'],
+            'deliver_now' => ['nullable', 'boolean'],
             'expires_at' => ['nullable', 'string', function (string $attribute, mixed $value, Closure $fail) {
                 if ($value === null || $value === '') return;
                 if (!$this->normalizeExpiryDate($value)) {
@@ -78,6 +82,10 @@ class GiftCardController extends Controller
         }
 
         $giftCard = $service->issue($actor, $businessId, $data);
+
+        if ($request->boolean('deliver_now') && $giftCard->issued_to_email) {
+            $giftCard = $service->deliver($actor, $giftCard);
+        }
 
         return response()->json(['data' => $giftCard], 201);
     }
@@ -127,8 +135,11 @@ class GiftCardController extends Controller
         $data = $request->validate([
             'issued_to_name' => ['nullable', 'string', 'max:120'],
             'issued_to_phone' => ['nullable', 'string', 'max:40'],
+            'issued_to_email' => ['nullable', 'email', 'max:150'],
             'purchased_by_name' => ['nullable', 'string', 'max:120'],
             'purchased_by_phone' => ['nullable', 'string', 'max:40'],
+            'purchased_by_email' => ['nullable', 'email', 'max:150'],
+            'delivery_message' => ['nullable', 'string', 'max:2000'],
             'expires_at' => ['nullable', 'string', function (string $attribute, mixed $value, Closure $fail) {
                 if ($value === null || $value === '') return;
                 if (!$this->normalizeExpiryDate($value)) {
@@ -142,7 +153,7 @@ class GiftCardController extends Controller
         if (array_key_exists('expires_at', $data)) {
             $giftCard->expires_at = $this->normalizeExpiryDate($data['expires_at'] ?? null);
         }
-        foreach (['issued_to_name', 'issued_to_phone', 'purchased_by_name', 'purchased_by_phone', 'notes'] as $k) {
+        foreach (['issued_to_name', 'issued_to_phone', 'issued_to_email', 'purchased_by_name', 'purchased_by_phone', 'purchased_by_email', 'notes', 'delivery_message'] as $k) {
             if (array_key_exists($k, $data)) $giftCard->{$k} = $data[$k];
         }
         if (!empty($data['status'])) {
@@ -184,5 +195,18 @@ class GiftCardController extends Controller
 
         $giftCard = $service->adjust($actor, $giftCard, (int) $data['delta_amount'], $data['reason'] ?? null);
         return response()->json(['data' => $giftCard]);
+    }
+
+    public function deliver(Request $request, GiftCard $giftCard, GiftCardService $service)
+    {
+        $actor = $request->user();
+        if (!$actor) abort(401);
+        if ($actor->role === User::ROLE_STAFF) abort(403);
+        if (!$actor->isSuperAdmin() && (int) $giftCard->business_id !== (int) $actor->business_id) abort(404);
+        if (!$giftCard->issued_to_email) {
+            throw ValidationException::withMessages(['issued_to_email' => 'Recipient email is required.']);
+        }
+
+        return response()->json(['data' => $service->deliver($actor, $giftCard)]);
     }
 }

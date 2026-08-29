@@ -16,11 +16,16 @@ class GiftCard extends Model
         'currency',
         'issued_to_name',
         'issued_to_phone',
+        'issued_to_email',
         'purchased_by_name',
         'purchased_by_phone',
+        'purchased_by_email',
         'expires_at',
         'status',
         'notes',
+        'delivery_message',
+        'delivery_status',
+        'delivered_at',
         'last_redeemed_at',
         'redeemed_total',
     ];
@@ -28,6 +33,7 @@ class GiftCard extends Model
     protected $casts = [
         'expires_at' => 'datetime',
         'last_redeemed_at' => 'datetime',
+        'delivered_at' => 'datetime',
     ];
 
     public function business(): BelongsTo

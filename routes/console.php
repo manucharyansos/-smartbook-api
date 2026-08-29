@@ -14,3 +14,9 @@ Schedule::command('reminders:dispatch-due')
     ->withoutOverlapping()
     ->runInBackground()
     ->onOneServer();
+
+Schedule::command('marketing:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping()
+    ->runInBackground()
+    ->onOneServer();

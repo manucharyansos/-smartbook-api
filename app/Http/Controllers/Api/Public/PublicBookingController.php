@@ -18,6 +18,7 @@ use App\Services\TelegramService;
 use App\Services\ClientIdentityLinker;
 use App\Services\GiftCardService;
 use App\Services\LoyaltyService;
+use App\Services\WaitlistService;
 use Illuminate\Support\Facades\Mail;
 use App\Support\Phone;
 use Illuminate\Http\Request;
@@ -509,7 +510,7 @@ class PublicBookingController extends Controller
             ->where('is_active', true)
             ->when($request->filled('location_id'), fn ($q) => $this->applyLocationCompatibility($q, (int) $request->integer('location_id')))
             ->orderBy('id')
-            ->get($this->filterColumnsForOptionalLocation('services', ['id', 'name', 'description', 'image_url', 'duration_minutes', 'price', 'currency', 'is_active', 'location_id']));
+            ->get($this->filterColumnsForOptionalLocation('services', ['id', 'name', 'description', 'image_url', 'duration_minutes', 'booking_mode', 'capacity', 'price', 'currency', 'is_active', 'location_id']));
 
         return response()->json([
             'data' => $services,
@@ -550,6 +551,7 @@ class PublicBookingController extends Controller
             'date'       => ['required', 'date_format:Y-m-d'],
             'staff_id'   => ['nullable', 'integer', 'exists:users,id'],
             'location_id'=> ['nullable', 'integer'],
+            'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
         ]);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
@@ -581,6 +583,7 @@ class PublicBookingController extends Controller
                 date: $data['date'],
                 businessId: $business->id,
                 locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+                partySize: max(1, (int) ($data['party_size'] ?? 1)),
             );
         } else {
             $staffMembers = User::query()
@@ -599,6 +602,7 @@ class PublicBookingController extends Controller
                     date: $data['date'],
                     businessId: (int) $business->id,
                     locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+                    partySize: max(1, (int) ($data['party_size'] ?? 1)),
                 ) as $slot) {
                     $flattened[] = $slot;
                 }
@@ -733,6 +737,7 @@ class PublicBookingController extends Controller
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
             'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'marketing_opt_in' => ['nullable', 'boolean'],
             'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'gift_card_code' => ['nullable', 'string', 'max:40'],
             'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
@@ -751,6 +756,9 @@ class PublicBookingController extends Controller
             ->keyBy('id');
         if ($services->count() !== count($requestedIds)) {
             return response()->json(['message' => 'Invalid service selection'], 422);
+        }
+        if ($services->contains(fn (Service $service) => ($service->booking_mode ?? 'individual') === 'group')) {
+            return response()->json(['message' => 'Group-capacity services must be booked separately.'], 422);
         }
 
         try {
@@ -854,11 +862,18 @@ class PublicBookingController extends Controller
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
                 'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
+                'marketing_opt_in' => (bool) ($data['marketing_opt_in'] ?? false),
+                'marketing_opted_in_at' => !empty($data['marketing_opt_in']) ? now() : null,
             ]);
         } else {
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
                 $client->email = Booking::normalizeContactEmail($data['client_email']);
+            }
+            if (!empty($data['marketing_opt_in'])) {
+                $client->marketing_opt_in = true;
+                $client->marketing_opted_in_at = now();
+                $client->marketing_unsubscribed_at = null;
             }
             $client->save();
         }
@@ -972,6 +987,7 @@ class PublicBookingController extends Controller
             'room_id'             => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'         => ['nullable', 'integer'],
             'source'              => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'marketing_opt_in'    => ['nullable', 'boolean'],
         ]);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
@@ -998,6 +1014,9 @@ class PublicBookingController extends Controller
                 ->first();
             if (!$service) {
                 return response()->json(['message' => "Service {$line['service_id']} not found"], 422);
+            }
+            if (($service->booking_mode ?? 'individual') === 'group') {
+                return response()->json(['message' => 'Group-capacity services must be booked separately.'], 422);
             }
 
             // Resolve staff (use provided or default)
@@ -1090,12 +1109,19 @@ class PublicBookingController extends Controller
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
                 'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
+                'marketing_opt_in' => (bool) ($data['marketing_opt_in'] ?? false),
+                'marketing_opted_in_at' => !empty($data['marketing_opt_in']) ? now() : null,
             ]);
         } else {
             // Update client name and email if provided
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
                 $client->email = Booking::normalizeContactEmail($data['client_email']);
+            }
+            if (!empty($data['marketing_opt_in'])) {
+                $client->marketing_opt_in = true;
+                $client->marketing_opted_in_at = now();
+                $client->marketing_unsubscribed_at = null;
             }
             $client->save();
         }
@@ -1276,6 +1302,13 @@ class PublicBookingController extends Controller
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
             'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
+            'marketing_opt_in' => ['nullable', 'boolean'],
+            'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
+            'gift_card_code' => ['nullable', 'string', 'max:40'],
+            'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
+            'recurrence_frequency' => ['nullable', 'in:weekly,biweekly,monthly'],
+            'recurrence_count' => ['nullable', 'integer', 'min:1', 'max:12'],
         ]);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
@@ -1286,6 +1319,19 @@ class PublicBookingController extends Controller
             ->where('is_active', true)
             ->when(!empty($data['location_id']), fn ($q) => $this->applyLocationCompatibility($q, (int) $data['location_id']))
             ->firstOrFail();
+
+        $partySize = max(1, (int) ($data['party_size'] ?? 1));
+        $recurrenceCount = max(1, (int) ($data['recurrence_count'] ?? 1));
+        $recurrenceFrequency = $recurrenceCount > 1 ? ($data['recurrence_frequency'] ?? null) : null;
+        if ($recurrenceCount > 1 && !$recurrenceFrequency) {
+            return response()->json(['message' => 'Choose a recurrence frequency.'], 422);
+        }
+        if (($service->booking_mode ?? 'individual') !== 'group' && $partySize > 1) {
+            return response()->json(['message' => 'This service accepts one customer per booking.'], 422);
+        }
+        if ($partySize > max(1, (int) ($service->capacity ?? 1))) {
+            return response()->json(['message' => 'The group size exceeds the service capacity.'], 422);
+        }
 
         // pick staff
         $staffId = (int)($data['staff_id'] ?? 0);
@@ -1333,6 +1379,7 @@ class PublicBookingController extends Controller
             date: $date,
             businessId: $business->id,
             locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+            partySize: $partySize,
         );
         $ok = collect($slots)->contains(fn($s) => substr($s['starts_at'], 11, 5) === $time);
         if (!$ok) return response()->json(['message' => 'Selected time is not available. Please refresh available times and try again.'], 422);
@@ -1347,6 +1394,37 @@ class PublicBookingController extends Controller
         $startsAtUtc = $startsAt->copy()->setTimezone('UTC');
         $endsAtUtc = $endsAt->copy()->setTimezone('UTC');
 
+        $occurrences = [['start' => $startsAtUtc, 'end' => $endsAtUtc]];
+        for ($index = 1; $index < $recurrenceCount; $index++) {
+            $occurrenceStart = match ($recurrenceFrequency) {
+                'weekly' => $startsAt->copy()->addWeeks($index),
+                'biweekly' => $startsAt->copy()->addWeeks($index * 2),
+                'monthly' => $startsAt->copy()->addMonthsNoOverflow($index),
+                default => $startsAt->copy(),
+            };
+            $occurrenceEnd = $occurrenceStart->copy()->addMinutes((int) $service->duration_minutes);
+            $this->assertWithinBusinessHours($business, $occurrenceStart, $occurrenceEnd);
+            $occurrenceSlots = $availability->slotsForDay(
+                staffId: $staff->id,
+                serviceId: $service->id,
+                date: $occurrenceStart->format('Y-m-d'),
+                businessId: $business->id,
+                locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+                partySize: $partySize,
+            );
+            $occurrenceTime = $occurrenceStart->format('H:i');
+            if (!collect($occurrenceSlots)->contains(fn ($slot) => substr($slot['starts_at'], 11, 5) === $occurrenceTime)) {
+                return response()->json([
+                    'message' => 'A recurring date is unavailable: ' . $occurrenceStart->format('Y-m-d H:i'),
+                    'unavailable_date' => $occurrenceStart->format('Y-m-d'),
+                ], 422);
+            }
+            $occurrences[] = [
+                'start' => $occurrenceStart->copy()->timezone('UTC'),
+                'end' => $occurrenceEnd->copy()->timezone('UTC'),
+            ];
+        }
+
         // create/find client inside this business
         $client = Client::query()
             ->where('business_id', $business->id)
@@ -1358,12 +1436,19 @@ class PublicBookingController extends Controller
                 'name'        => $data['client_name'],
                 'phone'       => $phoneNorm,
                 'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
+                'marketing_opt_in' => (bool) ($data['marketing_opt_in'] ?? false),
+                'marketing_opted_in_at' => !empty($data['marketing_opt_in']) ? now() : null,
             ]);
         } else {
             // Update client name and email if provided
             $client->name = $data['client_name'];
             if (isset($data['client_email'])) {
                 $client->email = Booking::normalizeContactEmail($data['client_email']);
+            }
+            if (!empty($data['marketing_opt_in'])) {
+                $client->marketing_opt_in = true;
+                $client->marketing_opted_in_at = now();
+                $client->marketing_unsubscribed_at = null;
             }
             $client->save();
         }
@@ -1383,6 +1468,7 @@ class PublicBookingController extends Controller
             'service_id'    => $service->id,
             'staff_id'      => $staff->id,
             'location_id'   => $resolvedLocationId,
+            'party_size'    => $partySize,
             'client_id'     => $client->id,
             'room_id'       => ($business->isHealthcareVertical()) ? ($data['room_id'] ?? null) : null,
             'starts_at'     => $startsAtUtc->format('Y-m-d H:i:s'),
@@ -1394,7 +1480,7 @@ class PublicBookingController extends Controller
             'source'        => $data['source'] ?? 'website',
             'status'        => 'pending',
             'booking_code'  => strtoupper(Str::random(8)),
-            'final_price'   => $service->price,
+            'final_price'   => $service->price === null ? null : (int) $service->price * $partySize,
             'currency'      => $service->currency ?? 'AMD',
 
             'phone_verification_code_hash' => Hash::make($code),
@@ -1403,9 +1489,35 @@ class PublicBookingController extends Controller
             'phone_verification_attempts' => 0,
         ];
 
-        $booking = Booking::query()->create($this->withoutUnavailableLocationAttribute($bookingPayload, 'bookings'));
+        $recurrenceId = $recurrenceCount > 1 ? (string) Str::uuid() : null;
+        $createdBookings = [];
+        $booking = DB::transaction(function () use ($staff, $business, $service, $partySize, $bookingPayload, $occurrences, $recurrenceId, $recurrenceFrequency, $recurrenceCount, &$createdBookings) {
+            User::query()->whereKey($staff->id)->lockForUpdate()->firstOrFail();
+            $root = null;
+            foreach ($occurrences as $index => $occurrence) {
+                if (!app(WaitlistService::class)->slotCanFit($business, $service, (int) $staff->id, $occurrence['start'], $occurrence['end'], $partySize)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'starts_at' => 'A selected recurring time is no longer available.',
+                    ]);
+                }
+                $payload = array_merge($bookingPayload, [
+                    'group_id' => $recurrenceId,
+                    'recurrence_id' => $recurrenceId,
+                    'recurrence_frequency' => $recurrenceFrequency,
+                    'recurrence_index' => $index + 1,
+                    'recurrence_count' => $recurrenceCount,
+                    'starts_at' => $occurrence['start']->format('Y-m-d H:i:s'),
+                    'ends_at' => $occurrence['end']->format('Y-m-d H:i:s'),
+                    'booking_code' => $index === 0 ? $bookingPayload['booking_code'] : strtoupper(Str::random(8)),
+                ]);
+                $current = Booking::query()->create($this->withoutUnavailableLocationAttribute($payload, 'bookings'));
+                $root ??= $current;
+                $createdBookings[] = $current;
+            }
+            return $root;
+        });
 
-        $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($service->price ?? 0));
+        $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($booking->final_price ?? 0));
 
         $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
 
@@ -1415,6 +1527,8 @@ class PublicBookingController extends Controller
                 'needs_phone_verification' => true,
                 'phone' => $phoneNorm,
                 'expires_at' => $expires->toISOString(),
+                'recurrence_id' => $recurrenceId,
+                'recurrence_count' => count($createdBookings),
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
@@ -1772,6 +1886,7 @@ class PublicBookingController extends Controller
             staffId: $requestedStaffId ?: null,
             locationId: $target->location_id ? (int) $target->location_id : null,
             excludeBookingIds: [(int) $target->id],
+            partySize: max(1, (int) ($target->party_size ?? 1)),
         );
 
         $timezone = $target->business?->effectiveTimezone() ?? 'Asia/Yerevan';
@@ -1891,7 +2006,8 @@ class PublicBookingController extends Controller
         $oldEnd = $target->ends_at?->copy();
         $oldStaff = $target->staff;
 
-        $updated = DB::transaction(function () use ($target, $business, $staff, $startLocal, $endLocal) {
+        $updated = DB::transaction(function () use ($target, $business, $staff, $startLocal, $endLocal, $services) {
+            User::query()->whereKey($staff->id)->lockForUpdate()->firstOrFail();
             $locked = Booking::query()->lockForUpdate()->findOrFail($target->id);
             if (!$this->canReschedulePublicBooking($locked)) {
                 throw \Illuminate\Validation\ValidationException::withMessages([
@@ -1899,7 +2015,22 @@ class PublicBookingController extends Controller
                 ]);
             }
 
-            $this->checkOverlap((int) $business->id, (int) $staff->id, $startLocal, $endLocal, (int) $locked->id);
+            $primaryService = $services->firstWhere('id', (int) $locked->service_id) ?: $services->first();
+            if (($primaryService?->booking_mode ?? 'individual') === 'group') {
+                if (!app(WaitlistService::class)->slotCanFit(
+                    $business,
+                    $primaryService,
+                    (int) $staff->id,
+                    $startLocal->copy()->timezone('UTC'),
+                    $endLocal->copy()->timezone('UTC'),
+                    max(1, (int) $locked->party_size),
+                    (int) $locked->id,
+                )) {
+                    throw \Illuminate\Validation\ValidationException::withMessages(['starts_at' => ['The selected group session has insufficient capacity.']]);
+                }
+            } else {
+                $this->checkOverlap((int) $business->id, (int) $staff->id, $startLocal, $endLocal, (int) $locked->id);
+            }
             $this->checkBlocked((int) $business->id, (int) $staff->id, $startLocal, $endLocal);
             $roomId = $this->resolveRescheduleRoomId($locked, $business, $startLocal, $endLocal);
 
@@ -1916,6 +2047,11 @@ class PublicBookingController extends Controller
         $booking->refresh();
         if ($oldStart && $oldEnd) {
             $this->sendBookingRescheduledNotifications($booking, $updated, $oldStart, $oldEnd, $oldStaff, $token);
+            try {
+                app(WaitlistService::class)->offerFreedSlot($updated, $oldStart, $oldEnd, (int) ($oldStaff?->id ?? $target->staff_id));
+            } catch (\Throwable $exception) {
+                \Log::warning('Automatic waitlist offer failed after public reschedule', ['booking_id' => $updated->id, 'error' => $exception->getMessage()]);
+            }
         }
 
         return response()->json([
@@ -1945,10 +2081,29 @@ class PublicBookingController extends Controller
         } else {
             $query->where('id', $booking->id);
         }
+        $cancelledBookings = (clone $query)->with(['business', 'service'])->get();
         $query->update(['status' => 'cancelled']);
         $booking->refresh();
         $this->sendBookingCancelledNotifications($booking);
         $this->sendBookingTelegramNotifications($booking, 'cancelled');
+
+        $systemActor = User::query()
+            ->where('business_id', $booking->business_id)
+            ->whereIn('role', [User::ROLE_OWNER, User::ROLE_MANAGER])
+            ->orderBy('id')
+            ->first();
+        foreach ($cancelledBookings as $cancelledBooking) {
+            $cancelledBooking->status = 'cancelled';
+            try {
+                if ($systemActor) {
+                    app(LoyaltyService::class)->reverseRedeemedForBooking($systemActor, $cancelledBooking);
+                    app(GiftCardService::class)->restoreForBooking($systemActor, $cancelledBooking);
+                }
+                app(WaitlistService::class)->offerFreedSlot($cancelledBooking);
+            } catch (\Throwable $exception) {
+                \Log::warning('Automatic waitlist offer failed after public cancellation', ['booking_id' => $cancelledBooking->id, 'error' => $exception->getMessage()]);
+            }
+        }
 
         return response()->json(['data' => $this->publicBookingPayload($booking)]);
     }

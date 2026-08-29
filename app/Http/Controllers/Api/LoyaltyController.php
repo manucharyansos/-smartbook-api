@@ -72,11 +72,13 @@ class LoyaltyController extends Controller
 
         $clients = $q->orderBy('name')->limit(500)->get();
 
-        $balances = DB::table('loyalty_point_ledgers')
-            ->select('client_id', DB::raw('COALESCE(SUM(delta_points),0) as points'))
+        $ledgerGroups = LoyaltyPointLedger::query()
             ->where('business_id', $actor->business_id)
-            ->groupBy('client_id')
-            ->pluck('points', 'client_id');
+            ->whereIn('client_id', $clients->pluck('id'))
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get()
+            ->groupBy('client_id');
 
         $lifetimeEarned = DB::table('loyalty_point_ledgers')
             ->select('client_id', DB::raw('COALESCE(SUM(CASE WHEN delta_points > 0 THEN delta_points ELSE 0 END),0) as points'))
@@ -84,12 +86,13 @@ class LoyaltyController extends Controller
             ->groupBy('client_id')
             ->pluck('points', 'client_id');
 
-        $data = $clients->map(function (Client $c) use ($balances, $lifetimeEarned) {
+        $svc = app(LoyaltyService::class);
+        $data = $clients->map(function (Client $c) use ($ledgerGroups, $lifetimeEarned, $svc) {
             return [
                 'id' => $c->id,
                 'name' => $c->name,
                 'phone' => $c->phone,
-                'points' => (int) ($balances[$c->id] ?? 0),
+                'points' => $svc->balanceFromEntries($ledgerGroups->get($c->id, collect())),
                 'lifetime_earned' => (int) ($lifetimeEarned[$c->id] ?? 0),
             ];
         });
@@ -155,5 +158,31 @@ class LoyaltyController extends Controller
         $ledger = $svc->adjust($actor, $client, (int) $data['delta_points'], $data['reason'] ?? null);
 
         return response()->json(['data' => $ledger], 201);
+    }
+
+    public function summary(Request $request, LoyaltyService $svc)
+    {
+        $actor = $request->user();
+        if (!$actor) abort(401);
+        $clientIds = Client::query()->where('business_id', $actor->business_id)->pluck('id');
+        $groups = LoyaltyPointLedger::query()
+            ->where('business_id', $actor->business_id)
+            ->whereIn('client_id', $clientIds)
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get()
+            ->groupBy('client_id');
+        $breakdowns = $groups->map(fn ($entries) => $svc->balanceBreakdownFromEntries($entries));
+        $balances = $breakdowns->map(fn (array $breakdown) => $breakdown['balance']);
+
+        return response()->json(['data' => [
+            'members' => $balances->filter(fn ($points) => $points > 0)->count(),
+            'outstanding_points' => (int) $balances->sum(),
+            'lifetime_earned' => (int) LoyaltyPointLedger::query()
+                ->where('business_id', $actor->business_id)
+                ->where('delta_points', '>', 0)
+                ->sum('delta_points'),
+            'expiring_in_30_days' => (int) $breakdowns->sum('expiring_in_30_days'),
+        ]]);
     }
 }

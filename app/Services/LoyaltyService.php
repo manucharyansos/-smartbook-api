@@ -8,6 +8,8 @@ use App\Models\LoyaltyProgram;
 use App\Models\LoyaltyPointLedger;
 use App\Models\User;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 
 class LoyaltyService
 {
@@ -31,10 +33,66 @@ class LoyaltyService
 
     public function getClientBalance(int $businessId, int $clientId): int
     {
-        return (int) LoyaltyPointLedger::query()
+        $entries = LoyaltyPointLedger::query()
             ->where('business_id', $businessId)
             ->where('client_id', $clientId)
-            ->sum('delta_points');
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get();
+
+        return $this->balanceFromEntries($entries);
+    }
+
+    public function balanceFromEntries(Collection $entries, ?Carbon $asOf = null): int
+    {
+        return $this->balanceBreakdownFromEntries($entries, $asOf)['balance'];
+    }
+
+    public function balanceBreakdownFromEntries(Collection $entries, ?Carbon $asOf = null): array
+    {
+        $asOf = ($asOf ?: now())->copy();
+        $lots = [];
+
+        foreach ($entries->sortBy(fn ($entry) => sprintf('%s-%012d', $entry->created_at?->format('YmdHis.u') ?? '', $entry->id)) as $entry) {
+            $delta = (int) $entry->delta_points;
+            $entryTime = $entry->created_at ?: $asOf;
+
+            foreach ($lots as &$lot) {
+                if ($lot['expires_at'] && $lot['expires_at']->lt($entryTime)) {
+                    $lot['remaining'] = 0;
+                }
+            }
+            unset($lot);
+
+            if ($delta > 0) {
+                $lots[] = [
+                    'remaining' => $delta,
+                    'expires_at' => $entry->expires_at?->copy(),
+                ];
+                continue;
+            }
+
+            $needed = abs($delta);
+            foreach ($lots as &$lot) {
+                if ($needed <= 0) break;
+                $take = min($needed, max(0, (int) $lot['remaining']));
+                $lot['remaining'] -= $take;
+                $needed -= $take;
+            }
+            unset($lot);
+        }
+
+        $validLots = collect($lots)->filter(function (array $lot) use ($asOf) {
+            return !$lot['expires_at'] || $lot['expires_at']->gt($asOf);
+        });
+        $expiresBefore = $asOf->copy()->addDays(30);
+
+        return [
+            'balance' => (int) $validLots->sum(fn (array $lot) => max(0, (int) $lot['remaining'])),
+            'expiring_in_30_days' => (int) $validLots
+                ->filter(fn (array $lot) => $lot['expires_at'] && $lot['expires_at']->lte($expiresBefore))
+                ->sum(fn (array $lot) => max(0, (int) $lot['remaining'])),
+        ];
     }
 
     public function computePoints(LoyaltyProgram $program, int $amount): int
@@ -185,6 +243,10 @@ class LoyaltyService
 
     public function adjust(User $actor, Client $client, int $delta, ?string $reason = null): LoyaltyPointLedger
     {
+        if ($delta < 0 && abs($delta) > $this->getClientBalance((int) $client->business_id, (int) $client->id)) {
+            throw ValidationException::withMessages(['delta_points' => 'The adjustment exceeds the available points balance.']);
+        }
+
         return LoyaltyPointLedger::create([
             'business_id' => $client->business_id,
             'client_id' => $client->id,

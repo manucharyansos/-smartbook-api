@@ -9,6 +9,7 @@ use App\Models\Business;
 use App\Models\Room;
 use App\Models\Service;
 use App\Models\User;
+use App\Models\WaitlistEntry;
 use App\Support\InteractsWithOptionalLocationColumns;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -20,15 +21,15 @@ class AvailabilityService
     /**
      * Backward-compatible single-service helper.
      */
-    public function slotsForDay(int $staffId, int $serviceId, string $date, ?int $businessId = null, ?int $locationId = null, array $excludeBookingIds = []): array
+    public function slotsForDay(int $staffId, int $serviceId, string $date, ?int $businessId = null, ?int $locationId = null, array $excludeBookingIds = [], int $partySize = 1): array
     {
-        return $this->slotsForSelection([$serviceId], $date, $businessId, $staffId, $locationId, $excludeBookingIds);
+        return $this->slotsForSelection([$serviceId], $date, $businessId, $staffId, $locationId, $excludeBookingIds, $partySize);
     }
 
     /**
      * Smart availability for one or many services and either one staff member or the whole team.
      */
-    public function slotsForSelection(array $serviceIds, string $date, ?int $businessId = null, ?int $staffId = null, ?int $locationId = null, array $excludeBookingIds = []): array
+    public function slotsForSelection(array $serviceIds, string $date, ?int $businessId = null, ?int $staffId = null, ?int $locationId = null, array $excludeBookingIds = [], int $partySize = 1): array
     {
         $serviceIds = array_values(array_unique(array_filter(array_map('intval', $serviceIds), fn ($id) => $id > 0)));
         $excludeBookingIds = array_values(array_unique(array_filter(array_map('intval', $excludeBookingIds), fn ($id) => $id > 0)));
@@ -46,6 +47,14 @@ class AvailabilityService
 
         $services = $serviceQ->get();
         if ($services->count() !== count($serviceIds)) {
+            return [];
+        }
+
+        $groupService = $services->count() === 1 && ($services->first()->booking_mode ?? 'individual') === 'group'
+            ? $services->first()
+            : null;
+        $partySize = max(1, $partySize);
+        if ($groupService && $partySize > max(1, (int) $groupService->capacity)) {
             return [];
         }
 
@@ -84,7 +93,7 @@ class AvailabilityService
 
         $slots = [];
         foreach ($staffMembers as $staff) {
-            $slots = array_merge($slots, $this->buildSlotsForStaffDuration($business, $staff, $date, $totalDuration, $excludeBookingIds));
+            $slots = array_merge($slots, $this->buildSlotsForStaffDuration($business, $staff, $date, $totalDuration, $excludeBookingIds, $groupService, $partySize));
         }
 
         if (!$slots) {
@@ -102,7 +111,7 @@ class AvailabilityService
         return $this->markRecommendedSlots($slots);
     }
 
-    private function buildSlotsForStaffDuration(Business $business, User $staff, string $date, int $duration, array $excludeBookingIds = []): array
+    private function buildSlotsForStaffDuration(Business $business, User $staff, string $date, int $duration, array $excludeBookingIds = [], ?Service $groupService = null, int $partySize = 1): array
     {
         try {
             $day = Carbon::createFromFormat('Y-m-d', $date)->startOfDay();
@@ -145,7 +154,7 @@ class AvailabilityService
             ->where('staff_id', $staff->id)
             ->when($excludeBookingIds, fn ($query) => $query->whereNotIn('id', $excludeBookingIds))
             ->where(function ($q) {
-                $q->where('status', 'confirmed')
+                $q->whereIn('status', ['confirmed', 'in_progress'])
                     ->orWhere(function ($pending) {
                         $pending->where('status', 'pending')
                             ->where(function ($verifiedOrFresh) {
@@ -162,7 +171,24 @@ class AvailabilityService
             ->whereNotNull('ends_at')
             ->where('starts_at', '<', $dayEndUtc->format('Y-m-d H:i:s'))
             ->where('ends_at', '>', $dayStartUtc->format('Y-m-d H:i:s'))
-            ->get(['starts_at', 'ends_at', 'room_id']);
+            ->get(['starts_at', 'ends_at', 'room_id', 'service_id', 'party_size']);
+
+        $activeOffers = WaitlistEntry::query()
+            ->where('business_id', $business->id)
+            ->where('offered_staff_id', $staff->id)
+            ->where('status', 'offered')
+            ->where('offer_expires_at', '>', now())
+            ->where('offered_starts_at', '<', $dayEndUtc->format('Y-m-d H:i:s'))
+            ->where('offered_ends_at', '>', $dayStartUtc->format('Y-m-d H:i:s'))
+            ->get(['service_id', 'offered_starts_at', 'offered_ends_at', 'party_size'])
+            ->map(fn (WaitlistEntry $offer) => (object) [
+                'service_id' => $offer->service_id,
+                'starts_at' => $offer->offered_starts_at,
+                'ends_at' => $offer->offered_ends_at,
+                'party_size' => $offer->party_size,
+                'room_id' => null,
+            ]);
+        $busyReservations = $busyBookings->concat($activeOffers);
 
         $busyBlocks = BookingBlock::query()
             ->where('business_id', $business->id)
@@ -176,7 +202,14 @@ class AvailabilityService
             ->get(['starts_at', 'ends_at', 'staff_id']);
 
         $intervals = $this->mergeBusyIntervals(
-            $busyBookings,
+            $busyReservations,
+            $busyBlocks,
+            $dayStart,
+            $dayEnd,
+            $tz,
+        );
+        $blockIntervals = $this->mergeBusyIntervals(
+            collect(),
             $busyBlocks,
             $dayStart,
             $dayEnd,
@@ -192,7 +225,13 @@ class AvailabilityService
                 continue;
             }
 
-            if ($this->collidesWithIntervals($intervals, $start, $end)) {
+            $seatsRemaining = null;
+            if ($groupService) {
+                if ($this->collidesWithIntervals($blockIntervals, $start, $end)) continue;
+                [$canFit, $usedSeats] = $this->groupSlotState($busyReservations, $groupService, $start, $end, $tz);
+                $seatsRemaining = max(0, (int) $groupService->capacity - $usedSeats);
+                if (!$canFit || $seatsRemaining < $partySize) continue;
+            } elseif ($this->collidesWithIntervals($intervals, $start, $end)) {
                 continue;
             }
 
@@ -215,6 +254,9 @@ class AvailabilityService
                 'smart_reason' => $reason,
                 'gap_before_minutes' => $gapBefore,
                 'gap_after_minutes' => $gapAfter,
+                'booking_mode' => $groupService ? 'group' : 'individual',
+                'capacity' => $groupService ? (int) $groupService->capacity : 1,
+                'seats_remaining' => $groupService ? $seatsRemaining : 1,
             ];
 
             if (method_exists($business, 'isDental') && $business->isDental()) {
@@ -299,6 +341,28 @@ class AvailabilityService
         }
 
         return false;
+    }
+
+    private function groupSlotState(Collection $bookings, Service $service, Carbon $start, Carbon $end, string $timezone): array
+    {
+        $usedSeats = 0;
+        foreach ($bookings as $booking) {
+            $bookingStart = $booking->starts_at instanceof Carbon
+                ? $booking->starts_at->copy()->timezone($timezone)
+                : Carbon::parse($booking->starts_at, 'UTC')->timezone($timezone);
+            $bookingEnd = $booking->ends_at instanceof Carbon
+                ? $booking->ends_at->copy()->timezone($timezone)
+                : Carbon::parse($booking->ends_at, 'UTC')->timezone($timezone);
+
+            if (!$bookingStart->lt($end) || !$bookingEnd->gt($start)) continue;
+            $sameClass = (int) $booking->service_id === (int) $service->id
+                && $bookingStart->equalTo($start)
+                && $bookingEnd->equalTo($end);
+            if (!$sameClass) return [false, $usedSeats];
+            $usedSeats += max(1, (int) ($booking->party_size ?? 1));
+        }
+
+        return [$usedSeats < max(1, (int) $service->capacity), $usedSeats];
     }
 
     private function scoreSlot(

@@ -27,6 +27,7 @@ class AvailabilityController extends Controller
             'staff_id' => 'nullable|integer|exists:users,id',
             'location_id' => 'nullable|integer',
             'date' => 'required|date_format:Y-m-d',
+            'party_size' => 'nullable|integer|min:1|max:500',
         ]);
 
         $serviceIds = [];
@@ -55,6 +56,7 @@ class AvailabilityController extends Controller
             businessId: $businessId,
             staffId: $staffId,
             locationId: $request->filled('location_id') ? (int) $request->integer('location_id') : null,
+            partySize: max(1, (int) $request->integer('party_size', 1)),
         );
 
         return response()->json($slots);

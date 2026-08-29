@@ -17,6 +17,11 @@ class BookingResource extends JsonResource
         return [
             'id' => $this->id,
             'group_id' => $this->group_id,
+            'party_size' => (int) ($this->party_size ?? 1),
+            'recurrence_id' => $this->recurrence_id,
+            'recurrence_frequency' => $this->recurrence_frequency,
+            'recurrence_index' => (int) ($this->recurrence_index ?? 1),
+            'recurrence_count' => (int) ($this->recurrence_count ?? 1),
             'booking_code' => $this->booking_code,
 
             'business_id' => $this->business_id,
@@ -50,6 +55,8 @@ class BookingResource extends JsonResource
                     'duration_minutes' => $this->service->duration_minutes,
                     'price' => $this->service->price,
                     'currency' => $this->service->currency ?? null,
+                    'booking_mode' => $this->service->booking_mode ?? 'individual',
+                    'capacity' => (int) ($this->service->capacity ?? 1),
                 ];
             }),
 
