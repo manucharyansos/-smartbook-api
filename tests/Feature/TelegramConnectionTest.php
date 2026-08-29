@@ -67,6 +67,33 @@ it('connects a business user through a one-time Telegram deep link', function ()
         ->assertJsonPath('data.connected', true);
 });
 
+it('lets a staff member connect their own Telegram account', function () {
+    $business = Business::factory()->create([
+        'is_onboarding_completed' => true,
+        'status' => 'active',
+        'billing_status' => 'active',
+    ]);
+    $staff = User::factory()->staff($business->id)->create(['is_active' => true]);
+    Sanctum::actingAs($staff);
+
+    $connection = $this->postJson('/api/telegram/connection')
+        ->assertOk()
+        ->assertJsonPath('data.connected', false)
+        ->json('data');
+
+    $payload = telegramStartPayload($connection['url']);
+    $this->withHeader('X-Telegram-Bot-Api-Secret-Token', 'test-webhook-secret')
+        ->postJson('/api/webhooks/telegram', [
+            'message' => ['chat' => ['id' => 987654], 'text' => '/start ' . $payload],
+        ])
+        ->assertOk()
+        ->assertJsonPath('ok', true);
+
+    expect($staff->fresh()->telegram_chat_id)->toBe('987654');
+    expect(app(TelegramService::class)->staffBookingChatIds($staff->fresh()))
+        ->toBe(['987654']);
+});
+
 it('connects a verified booking customer and exposes the connected state', function () {
     $business = Business::factory()->create(['timezone' => 'UTC']);
     $staff = User::factory()->staff($business->id)->create(['is_active' => true]);

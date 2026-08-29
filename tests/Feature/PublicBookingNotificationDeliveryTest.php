@@ -96,11 +96,19 @@ it('keeps the verification code but removes the internal booking code from custo
         'booking' => $this->booking,
         'manageLink' => 'https://vizit.am/book/example',
     ])->render();
+    $verificationText = view('emails.public_booking_verification_text', [
+        'booking' => $this->booking->load(['business', 'service', 'staff', 'items.service']),
+        'code' => '2468',
+        'expires' => now()->addMinutes(10),
+    ])->render();
 
     expect($verificationHtml)
         ->toContain('2468')
         ->not->toContain('MAIL1234')
         ->not->toContain('Ամրագրման կոդ');
+    expect($verificationText)
+        ->toContain('2468')
+        ->not->toContain('MAIL1234');
     expect($confirmedHtml)
         ->not->toContain('MAIL1234')
         ->not->toContain('Ամրագրման կոդ');

@@ -2690,7 +2690,10 @@ class PublicBookingController extends Controller
 
             try {
                 $send = function ($transport) use ($booking, $code, $expires, $bookingPageUrl, $targetEmail) {
-                    $transport->send('emails.public_booking_verification', [
+                    $transport->send([
+                        'html' => 'emails.public_booking_verification',
+                        'text' => 'emails.public_booking_verification_text',
+                    ], [
                         'booking' => $booking,
                         'code' => $code,
                         'expires' => $expires,
@@ -2698,12 +2701,15 @@ class PublicBookingController extends Controller
                     ], function ($message) use ($targetEmail, $booking) {
                         $message
                             ->to($targetEmail)
-                            ->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
+                            ->subject('Vizit հաստատման կոդ • ' . ($booking->business?->name ?? 'Vizit'));
                     });
                 };
 
                 if ($mailer === null) {
-                    Mail::send('emails.public_booking_verification', [
+                    Mail::send([
+                        'html' => 'emails.public_booking_verification',
+                        'text' => 'emails.public_booking_verification_text',
+                    ], [
                         'booking' => $booking,
                         'code' => $code,
                         'expires' => $expires,
@@ -2711,7 +2717,7 @@ class PublicBookingController extends Controller
                     ], function ($message) use ($targetEmail, $booking) {
                         $message
                             ->to($targetEmail)
-                            ->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
+                            ->subject('Vizit հաստատման կոդ • ' . ($booking->business?->name ?? 'Vizit'));
                     });
                 } else {
                     $send(Mail::mailer($mailer));

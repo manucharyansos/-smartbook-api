@@ -16,14 +16,10 @@ return [
 
     'default' => env('MAIL_MAILER', env('APP_ENV', 'production') === 'production' ? 'smtp' : 'log'),
 
-    // Booking verification must stay available even when the primary SMTP
-    // provider is temporarily unreachable. Shared hosting normally exposes a
-    // local sendmail transport, so production can use it as a second attempt
-    // without ever treating the log/array transports as real delivery.
-    'verification_fallback' => env(
-        'MAIL_VERIFICATION_FALLBACK_MAILER',
-        env('APP_ENV', 'production') === 'production' ? 'sendmail' : null,
-    ),
+    // Keep verification mail on the same authenticated transport as the rest
+    // of Vizit. A local sendmail fallback can have a different DKIM/SPF path
+    // and damage inbox placement. Configure only another authenticated mailer.
+    'verification_fallback' => env('MAIL_VERIFICATION_FALLBACK_MAILER'),
 
     /*
     |--------------------------------------------------------------------------

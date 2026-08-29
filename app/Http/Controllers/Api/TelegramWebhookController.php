@@ -40,7 +40,7 @@ class TelegramWebhookController extends Controller
 
         $startPayload = trim((string) ($matches[1] ?? ''));
         if ($startPayload === '') {
-            $telegram->send($chatId, 'Բացեք Vizit-ի ամրագրման կամ բիզնեսի կարգավորումների էջը և սեղմեք «Միացնել Telegram-ը»։');
+            $telegram->send($chatId, 'Բացեք Vizit-ի ձեր հաշվի կամ ամրագրման էջը և սեղմեք «Միացնել Telegram-ը»։');
             return response()->json(['ok' => true]);
         }
 
@@ -52,7 +52,9 @@ class TelegramWebhookController extends Controller
 
         if ($connection['type'] === 'user') {
             $model = User::query()->find($connection['id']);
-            $label = 'Բիզնեսի Telegram ծանուցումները միացված են ✅';
+            $label = $model?->role === User::ROLE_STAFF
+                ? 'Աշխատակցի Telegram ծանուցումները միացված են ✅'
+                : 'Բիզնեսի Telegram ծանուցումները միացված են ✅';
         } else {
             $model = Client::query()->find($connection['id']);
             $label = 'Ձեր ամրագրումների Telegram ծանուցումները միացված են ✅';
