@@ -98,7 +98,7 @@ it('exposes the weekly business hours needed by public map details', function ()
             'slug' => 'map-schedule-studio',
         ])
         ->assertJsonPath('data.0.working_hours.0.weekday', 1)
-        ->assertJsonPath('data.0.working_hours.0.start', '09:00:00')
+        ->assertJsonPath('data.0.working_hours.0.start', '09:00')
         ->assertJsonPath('data.0.working_hours.2.is_closed', true);
 
     $this->getJson('/api/public/businesses/map-schedule-studio')
