@@ -56,6 +56,34 @@ it('does not claim success when no verification channel delivered the code', fun
         ->assertJsonPath('verification_delivery.telegram', false);
 });
 
+it('falls back to the local mail transport when primary smtp delivery fails', function () {
+    app()->detectEnvironment(fn () => 'production');
+    config([
+        'mail.default' => 'smtp',
+        'mail.verification_fallback' => 'sendmail',
+    ]);
+
+    $fallback = Mockery::mock();
+    $fallback->shouldReceive('send')->once();
+
+    Mail::shouldReceive('send')
+        ->once()
+        ->andThrow(new RuntimeException('Primary SMTP unavailable'));
+    Mail::shouldReceive('mailer')
+        ->once()
+        ->with('sendmail')
+        ->andReturn($fallback);
+
+    try {
+        $this->postJson('/api/public/bookings/MAIL1234/resend')
+            ->assertOk()
+            ->assertJsonPath('verification_delivery.email', true)
+            ->assertJsonPath('verification_delivery.telegram', false);
+    } finally {
+        app()->detectEnvironment(fn () => 'testing');
+    }
+});
+
 it('keeps the verification code but removes the internal booking code from customer email content', function () {
     $verificationHtml = view('emails.public_booking_verification', [
         'booking' => $this->booking->load(['business', 'service', 'staff', 'items.service']),

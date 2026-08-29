@@ -173,6 +173,9 @@ class PublicBookingController extends Controller
             if ($hasLocations) {
                 $query->with('locations');
             }
+            if ($this->hasTable('business_working_hours')) {
+                $query->with(['workingHours' => fn ($hours) => $hours->orderBy('weekday')]);
+            }
             if ($hasCategories && $this->hasColumn('businesses', 'business_category_id')) {
                 $query->with('category');
             }
@@ -446,6 +449,10 @@ class PublicBookingController extends Controller
         $query = $this->publicBusinessQuery($slug)
             ->with(['locations', 'category']);
 
+        if ($this->hasTable('business_working_hours')) {
+            $query->with(['workingHours' => fn ($hours) => $hours->orderBy('weekday')]);
+        }
+
         $business = $query->firstOrFail();
 
         $primaryLocation = $business->locations->firstWhere('is_primary', true) ?? $business->locations->first();
@@ -481,6 +488,7 @@ class PublicBookingController extends Controller
             'timezone' => $business->effectiveTimezone(),
             'work_start' => $business->work_start,
             'work_end' => $business->work_end,
+            'working_hours' => $this->serializeWorkingHours($business),
             'short_description' => $business->short_description,
             'description' => $business->description,
             'cover_url' => ($business->show_cover ?? true) ? $business->cover_url : null,
@@ -2610,24 +2618,13 @@ class PublicBookingController extends Controller
                     'mailer' => config('mail.default'),
                 ]);
             } else {
-                try {
-                    Mail::send('emails.public_booking_verification', [
-                        'booking' => $booking,
-                        'code' => $code,
-                        'expires' => $expires,
-                        'manageLink' => $bookingPageUrl,
-                    ], function ($m) use ($targetEmail, $booking) {
-                        $m->to($targetEmail)->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
-                    });
-                    $delivery['email'] = true;
-                } catch (\Throwable $ex) {
-                    \Log::warning('Public booking verification email delivery failed', [
-                        'booking_id' => $booking->id,
-                        'email' => $targetEmail,
-                        'mailer' => config('mail.default'),
-                        'error' => $ex->getMessage(),
-                    ]);
-                }
+                $delivery['email'] = $this->sendVerificationEmail(
+                    $booking,
+                    $code,
+                    $expires,
+                    $bookingPageUrl,
+                    $targetEmail,
+                );
             }
         } else {
             \Log::warning('Public booking verification email delivery skipped: booking has no email', [
@@ -2651,11 +2648,92 @@ class PublicBookingController extends Controller
 
     private function realMailDeliveryAvailable(): bool
     {
+        return $this->verificationMailers() !== [];
+    }
+
+    /**
+     * @return list<?string> Null means the configured default mailer.
+     */
+    private function verificationMailers(): array
+    {
         if (app()->environment('testing')) {
-            return true;
+            return [null];
         }
 
-        return !in_array((string) config('mail.default'), ['array', 'log'], true);
+        $default = trim((string) config('mail.default'));
+        $fallback = trim((string) config('mail.verification_fallback'));
+        $mailers = [];
+
+        if ($default !== '' && !in_array($default, ['array', 'log'], true)) {
+            $mailers[] = null;
+        }
+        if (
+            $fallback !== ''
+            && $fallback !== $default
+            && !in_array($fallback, ['array', 'log'], true)
+        ) {
+            $mailers[] = $fallback;
+        }
+
+        return $mailers;
+    }
+
+    private function sendVerificationEmail(
+        Booking $booking,
+        string $code,
+        $expires,
+        string $bookingPageUrl,
+        string $targetEmail,
+    ): bool {
+        foreach ($this->verificationMailers() as $mailer) {
+            $mailerName = $mailer ?: (string) config('mail.default');
+
+            try {
+                $send = function ($transport) use ($booking, $code, $expires, $bookingPageUrl, $targetEmail) {
+                    $transport->send('emails.public_booking_verification', [
+                        'booking' => $booking,
+                        'code' => $code,
+                        'expires' => $expires,
+                        'manageLink' => $bookingPageUrl,
+                    ], function ($message) use ($targetEmail, $booking) {
+                        $message
+                            ->to($targetEmail)
+                            ->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
+                    });
+                };
+
+                if ($mailer === null) {
+                    Mail::send('emails.public_booking_verification', [
+                        'booking' => $booking,
+                        'code' => $code,
+                        'expires' => $expires,
+                        'manageLink' => $bookingPageUrl,
+                    ], function ($message) use ($targetEmail, $booking) {
+                        $message
+                            ->to($targetEmail)
+                            ->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
+                    });
+                } else {
+                    $send(Mail::mailer($mailer));
+                }
+
+                \Log::info('Public booking verification email delivered', [
+                    'booking_id' => $booking->id,
+                    'mailer' => $mailerName,
+                ]);
+
+                return true;
+            } catch (\Throwable $ex) {
+                \Log::warning('Public booking verification email delivery failed', [
+                    'booking_id' => $booking->id,
+                    'email' => $targetEmail,
+                    'mailer' => $mailerName,
+                    'error' => $ex->getMessage(),
+                ]);
+            }
+        }
+
+        return false;
     }
 
     private function sendBookingConfirmedNotifications(Booking $booking, string $plainToken): void
@@ -3098,6 +3176,7 @@ class PublicBookingController extends Controller
             'timezone' => method_exists($business, 'effectiveTimezone') ? $business->effectiveTimezone() : 'Asia/Yerevan',
             'work_start' => $this->getBusinessField($business, 'work_start', null),
             'work_end' => $this->getBusinessField($business, 'work_end', null),
+            'working_hours' => $this->serializeWorkingHours($business),
             'short_description' => $this->getBusinessField($business, 'short_description', null),
             'cover_url' => $this->getBusinessField($business, 'cover_url', null),
             'logo_url' => $this->getBusinessField($business, 'logo_url', null),
@@ -3114,6 +3193,26 @@ class PublicBookingController extends Controller
             ),
             'booking_url' => "/book/{$slug}" . ($primaryLocation ? "?location_id={$primaryLocation->id}" : ''),
         ];
+    }
+
+    private function serializeWorkingHours(Business $business): array
+    {
+        if (!$this->hasTable('business_working_hours') || !$business->relationLoaded('workingHours')) {
+            return [];
+        }
+
+        return $business->workingHours
+            ->sortBy('weekday')
+            ->map(fn ($hours) => [
+                'weekday' => (int) $hours->weekday,
+                'is_closed' => (bool) $hours->is_closed,
+                'start' => $hours->start,
+                'end' => $hours->end,
+                'break_start' => $hours->break_start,
+                'break_end' => $hours->break_end,
+            ])
+            ->values()
+            ->all();
     }
 
     private function distanceKm(float $lat1, float $lng1, float $lat2, float $lng2): float

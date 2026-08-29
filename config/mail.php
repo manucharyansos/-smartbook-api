@@ -16,6 +16,15 @@ return [
 
     'default' => env('MAIL_MAILER', env('APP_ENV', 'production') === 'production' ? 'smtp' : 'log'),
 
+    // Booking verification must stay available even when the primary SMTP
+    // provider is temporarily unreachable. Shared hosting normally exposes a
+    // local sendmail transport, so production can use it as a second attempt
+    // without ever treating the log/array transports as real delivery.
+    'verification_fallback' => env(
+        'MAIL_VERIFICATION_FALLBACK_MAILER',
+        env('APP_ENV', 'production') === 'production' ? 'sendmail' : null,
+    ),
+
     /*
     |--------------------------------------------------------------------------
     | Mailer Configurations
@@ -113,7 +122,7 @@ return [
     */
 
     'from' => [
-        'address' => env('MAIL_FROM_ADDRESS', 'info@vizit.am'),
+        'address' => env('MAIL_FROM_ADDRESS', env('MAIL_USERNAME', 'info@vizit.am')),
         'name' => env('MAIL_FROM_NAME', 'Vizit'),
     ],
 
