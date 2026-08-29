@@ -14,6 +14,7 @@ use App\Models\Service;
 use App\Models\User;
 use App\Services\AvailabilityService;
 use App\Services\SmsService;
+use App\Services\TelegramLinkService;
 use App\Services\TelegramService;
 use App\Services\ClientIdentityLinker;
 use App\Services\GiftCardService;
@@ -953,7 +954,7 @@ class PublicBookingController extends Controller
             }
         });
 
-        $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
+        $verificationDelivery = $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
 
         return response()->json([
             'data' => [
@@ -961,6 +962,7 @@ class PublicBookingController extends Controller
                 'needs_phone_verification'  => true,
                 'phone'                     => $phoneNorm,
                 'expires_at'                => $expires->toISOString(),
+                'verification_delivery'     => $verificationDelivery,
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
@@ -1197,7 +1199,7 @@ class PublicBookingController extends Controller
             }
         });
 
-        $this->sendVerificationNotifications($bookings[0], $code, $expires, $bookings[0]->contactEmail());
+        $verificationDelivery = $this->sendVerificationNotifications($bookings[0], $code, $expires, $bookings[0]->contactEmail());
 
         return response()->json([
             'data' => [
@@ -1206,6 +1208,7 @@ class PublicBookingController extends Controller
                 'needs_phone_verification' => true,
                 'phone'                    => $phoneNorm,
                 'expires_at'               => $expires->toISOString(),
+                'verification_delivery'    => $verificationDelivery,
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
@@ -1519,7 +1522,7 @@ class PublicBookingController extends Controller
 
         $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($booking->final_price ?? 0));
 
-        $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
+        $verificationDelivery = $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
 
         return response()->json([
             'data' => [
@@ -1529,6 +1532,7 @@ class PublicBookingController extends Controller
                 'expires_at' => $expires->toISOString(),
                 'recurrence_id' => $recurrenceId,
                 'recurrence_count' => count($createdBookings),
+                'verification_delivery' => $verificationDelivery,
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
@@ -1765,7 +1769,7 @@ class PublicBookingController extends Controller
         $plainToken = $this->issueGuestAccessForBooking($booking);
         $this->sendBookingConfirmedNotifications($booking, $plainToken);
         $this->sendBusinessBookingEmailNotifications($booking);
-        $this->sendBookingTelegramNotifications($booking, 'confirmed');
+        $this->sendBookingTelegramNotifications($booking, 'confirmed', $plainToken);
 
         return response()->json([
             'ok' => true,
@@ -1808,12 +1812,47 @@ class PublicBookingController extends Controller
 
         $booking->refresh();
         $email = $booking->contactEmail();
-        $this->sendVerificationNotifications($booking, $codeValue, $expires, $email);
+        $delivery = $this->sendVerificationNotifications($booking, $codeValue, $expires, $email);
+
+        if (!$delivery['email'] && !$delivery['telegram']) {
+            return response()->json([
+                'message' => 'Հաստատման կոդը չհաջողվեց ուղարկել։ Խնդրում ենք փորձել կրկին։',
+                'expires_at' => $expires->toISOString(),
+                'verification_delivery' => $delivery,
+            ], 503);
+        }
 
         return response()->json([
             'ok' => true,
             'expires_at' => $expires->toISOString(),
             'message' => 'A new verification code has been sent.',
+            'verification_delivery' => $delivery,
+        ]);
+    }
+
+    public function telegramLink(string $code, Request $request, TelegramLinkService $links)
+    {
+        $booking = Booking::query()->with('client')->where('booking_code', $code)->firstOrFail();
+        $token = (string) ($request->bearerToken() ?: $request->query('token') ?: $request->header('X-Guest-Token'));
+        $this->assertGuestAccess($booking, $token);
+
+        abort_unless($booking->client, 422, 'Booking client is unavailable.');
+
+        try {
+            $link = $links->issueForClient($booking->client);
+        } catch (\Throwable $exception) {
+            \Log::warning('Public booking Telegram link could not be created', [
+                'booking_id' => $booking->id,
+                'error' => $exception->getMessage(),
+            ]);
+            return response()->json(['message' => 'Telegram բոտը դեռ կարգավորված չէ։'], 503);
+        }
+
+        return response()->json([
+            'data' => [
+                ...$link,
+                'connected' => trim((string) $booking->client->telegram_chat_id) !== '',
+            ],
         ]);
     }
 
@@ -2138,7 +2177,7 @@ class PublicBookingController extends Controller
 
     private function publicBookingPayload(Booking $booking): array
     {
-        $booking->loadMissing(['business:id,name,slug,business_type,address,phone,timezone', 'service:id,name,duration_minutes,price,currency', 'staff:id,name', 'items.service:id,name,duration_minutes,price,currency', 'client:id,email']);
+        $booking->loadMissing(['business:id,name,slug,business_type,address,phone,timezone', 'service:id,name,duration_minutes,price,currency', 'staff:id,name', 'items.service:id,name,duration_minutes,price,currency', 'client:id,email,telegram_chat_id']);
 
         $related = Booking::query()
             ->with(['service:id,name,duration_minutes,price,currency', 'staff:id,name', 'items.service:id,name,duration_minutes,price,currency'])
@@ -2168,6 +2207,7 @@ class PublicBookingController extends Controller
             'client_name' => $booking->client_name,
             'client_phone' => $booking->client_phone,
             'client_email' => $booking->contactEmail(),
+            'telegram_connected' => trim((string) $booking->client?->telegram_chat_id) !== '',
             'notes' => $booking->notes,
             'phone_verified_at' => $booking->phone_verified_at?->toISOString(),
             'guest_access_expires_at' => $booking->guest_access_expires_at?->toISOString(),
@@ -2381,7 +2421,6 @@ class PublicBookingController extends Controller
             $message = implode("\n", [
                 '🔁 Հաճախորդը փոխել է ամրագրման ժամը',
                 'Բիզնես՝ ' . $booking->business->name,
-                'Կոդ՝ ' . ($rootBooking->booking_code ?: $booking->booking_code),
                 'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
                 'Ծառայություն՝ ' . $services,
                 'Նախկին ժամ՝ ' . $oldTime,
@@ -2401,6 +2440,16 @@ class PublicBookingController extends Controller
                 ->values()
                 ->all();
             $telegram->sendToMany($staffChatIds, $message);
+
+            $customerChatId = trim((string) $booking->client?->telegram_chat_id);
+            if ($customerChatId !== '') {
+                $telegram->send($customerChatId, $telegram->customerBookingRescheduledMessage(
+                    $booking,
+                    $oldTime,
+                    $newTime,
+                    $this->frontendManageUrl($rootBooking, $guestToken),
+                ));
+            }
         } catch (\Throwable $exception) {
             \Log::warning('Public booking reschedule Telegram notification failed', [
                 'booking_id' => $booking->id,
@@ -2409,12 +2458,12 @@ class PublicBookingController extends Controller
         }
     }
 
-    private function sendBookingTelegramNotifications(Booking $booking, string $event): void
+    private function sendBookingTelegramNotifications(Booking $booking, string $event, ?string $guestToken = null): void
     {
         try {
             /** @var TelegramService $telegram */
             $telegram = app(TelegramService::class);
-            $booking->loadMissing(['business']);
+            $booking->loadMissing(['business', 'client']);
 
             if (!$booking->business || !$telegram->enabled()) {
                 return;
@@ -2424,7 +2473,19 @@ class PublicBookingController extends Controller
             $ownerMessage = $event === 'cancelled'
                 ? $telegram->bookingCancelledMessage($booking)
                 : $telegram->bookingConfirmedMessage($booking);
-            $telegram->sendToMany($ownerChatIds, $ownerMessage);
+            $ownerDelivery = $telegram->sendToMany($ownerChatIds, $ownerMessage);
+
+            $customerSent = false;
+            $customerChatId = trim((string) $booking->client?->telegram_chat_id);
+            if ($customerChatId !== '') {
+                $customerMessage = $event === 'cancelled'
+                    ? $telegram->customerBookingCancelledMessage($booking)
+                    : $telegram->customerBookingConfirmedMessage(
+                        $booking,
+                        $guestToken ? $this->frontendManageUrl($booking, $guestToken) : $this->frontendBookingPageUrl($booking),
+                    );
+                $customerSent = $telegram->send($customerChatId, $customerMessage);
+            }
 
             $relatedBookings = Booking::query()
                 ->with(['staff', 'service', 'items.service', 'business'])
@@ -2456,6 +2517,15 @@ class PublicBookingController extends Controller
 
                 $telegram->sendToMany($staffChatIds, $staffMessage);
             }
+
+            \Log::info('Telegram booking notification delivery completed', [
+                'booking_id' => $booking->id,
+                'event' => $event,
+                'owner_attempted' => $ownerDelivery['attempted'],
+                'owner_sent' => $ownerDelivery['sent'],
+                'customer_connected' => $customerChatId !== '',
+                'customer_sent' => $customerSent,
+            ]);
         } catch (\Throwable $ex) {
             \Log::warning('Telegram booking notification failed', [
                 'booking_id' => $booking->id,
@@ -2503,12 +2573,16 @@ class PublicBookingController extends Controller
         }
     }
 
-    private function sendVerificationNotifications(Booking $booking, string $code, $expires, ?string $email = null): void
+    /**
+     * @return array{email:bool,telegram:bool}
+     */
+    private function sendVerificationNotifications(Booking $booking, string $code, $expires, ?string $email = null): array
     {
         $booking->loadMissing(['business', 'service', 'staff', 'client', 'items.service']);
         $phone = (string) $booking->client_phone;
         $bookingPageUrl = $this->frontendBookingPageUrl($booking);
         $verifyMessage = $this->buildVerificationMessage($booking, $code, $expires, $bookingPageUrl);
+        $delivery = ['email' => false, 'telegram' => false];
 
         try {
             app(SmsService::class)->send($phone, $verifyMessage);
@@ -2530,23 +2604,58 @@ class PublicBookingController extends Controller
 
         $targetEmail = $email ?: $booking->contactEmail();
         if ($targetEmail) {
-            try {
-                Mail::send('emails.public_booking_verification', [
-                    'booking' => $booking,
-                    'code' => $code,
-                    'expires' => $expires,
-                    'manageLink' => $bookingPageUrl,
-                ], function ($m) use ($targetEmail, $booking) {
-                    $m->to($targetEmail)->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
-                });
-            } catch (\Throwable $ex) {
-                \Log::warning('Public booking verification email delivery failed', [
+            if (!$this->realMailDeliveryAvailable()) {
+                \Log::warning('Public booking verification email delivery skipped: real mail transport is not configured', [
                     'booking_id' => $booking->id,
-                    'email' => $targetEmail,
-                    'error' => $ex->getMessage(),
+                    'mailer' => config('mail.default'),
                 ]);
+            } else {
+                try {
+                    Mail::send('emails.public_booking_verification', [
+                        'booking' => $booking,
+                        'code' => $code,
+                        'expires' => $expires,
+                        'manageLink' => $bookingPageUrl,
+                    ], function ($m) use ($targetEmail, $booking) {
+                        $m->to($targetEmail)->subject('Հաստատեք ձեր ամրագրումը • ' . ($booking->business?->name ?? 'Vizit'));
+                    });
+                    $delivery['email'] = true;
+                } catch (\Throwable $ex) {
+                    \Log::warning('Public booking verification email delivery failed', [
+                        'booking_id' => $booking->id,
+                        'email' => $targetEmail,
+                        'mailer' => config('mail.default'),
+                        'error' => $ex->getMessage(),
+                    ]);
+                }
             }
+        } else {
+            \Log::warning('Public booking verification email delivery skipped: booking has no email', [
+                'booking_id' => $booking->id,
+            ]);
         }
+
+        $telegramChatId = trim((string) $booking->client?->telegram_chat_id);
+        if ($telegramChatId !== '') {
+            $delivery['telegram'] = app(TelegramService::class)->send($telegramChatId, $verifyMessage);
+        }
+
+        \Log::info('Public booking verification delivery completed', [
+            'booking_id' => $booking->id,
+            'email_sent' => $delivery['email'],
+            'telegram_sent' => $delivery['telegram'],
+        ]);
+
+        return $delivery;
+    }
+
+    private function realMailDeliveryAvailable(): bool
+    {
+        if (app()->environment('testing')) {
+            return true;
+        }
+
+        return !in_array((string) config('mail.default'), ['array', 'log'], true);
     }
 
     private function sendBookingConfirmedNotifications(Booking $booking, string $plainToken): void

@@ -40,7 +40,7 @@
       <a href="{{ $manageLink }}" style="display:inline-block;padding:14px 22px;border-radius:16px;background:#2b0d35;color:#fff;text-decoration:none;font-weight:700;">Բացել ամրագրումը</a>
     </div>
 
-    <p style="margin:22px 0 0;font-size:13px;line-height:1.75;color:#756777;">Կոդ՝ {{ $booking->booking_code }}։ Փոփոխությունը կրկին հնարավոր է միայն բիզնեսի սահմանած ժամկետի ընթացքում և ազատ ժամերի առկայության դեպքում։</p>
+    <p style="margin:22px 0 0;font-size:13px;line-height:1.75;color:#756777;">Փոփոխությունը կրկին հնարավոր է միայն բիզնեսի սահմանած ժամկետի ընթացքում և ազատ ժամերի առկայության դեպքում։</p>
   </div>
 </div>
 </body>

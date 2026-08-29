@@ -28,8 +28,7 @@
       @if($booking->staff?->name)
       <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Մասնագետ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $booking->staff?->name }}</div></div>
       @endif
-      <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ամսաթիվ և ժամ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $localStart?->format('d.m.Y H:i') ?? '—' }}</div></div>
-      <div style="padding:14px 0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ամրագրման կոդ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $booking->booking_code }}</div></div>
+      <div style="padding:14px 0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ամսաթիվ և ժամ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $localStart?->format('d.m.Y H:i') ?? '—' }}</div></div>
     </div>
 
     <p style="margin:22px 0 0;font-size:13px;line-height:1.75;color:#64748b;">

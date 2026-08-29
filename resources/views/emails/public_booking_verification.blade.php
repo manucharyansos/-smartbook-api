@@ -46,10 +46,6 @@
         <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ամսաթիվ և ժամ</div>
         <div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $localStart?->format('d.m.Y H:i') ?? '—' }}</div>
       </div>
-      <div style="padding:14px 0;">
-        <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ամրագրման կոդ</div>
-        <div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;font-family:Arial,Helvetica,sans-serif;">{{ $booking->booking_code }}</div>
-      </div>
     </div>
 
     <div style="margin-top:24px;text-align:center;">

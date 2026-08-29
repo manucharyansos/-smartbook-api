@@ -39,7 +39,6 @@ class BookingCreatedNotification extends Notification implements ShouldQueue
             ->line("Client: {$b->client_name} ({$b->client_phone})")
             ->line("Service: {$this->service->name}")
             ->line("Time: {$b->starts_at} — {$b->ends_at}")
-            ->line("Code: {$b->booking_code}") // Փոխել code-ից booking_code
             ->action("Open Dashboard", config('app.frontend_url') . "/app/calendar")
             ->line("Notes: " . ($b->notes ?? "—"));
     }

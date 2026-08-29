@@ -13,6 +13,8 @@ use App\Http\Controllers\Api\ServiceController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\BusinessOnboardingController;
 use App\Http\Controllers\Api\BusinessSettingsController;
+use App\Http\Controllers\Api\TelegramConnectionController;
+use App\Http\Controllers\Api\TelegramWebhookController;
 
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\CalendarController;
@@ -93,6 +95,7 @@ Route::prefix('v1/public')->group(function () {
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
+    Route::post('/bookings/{code}/telegram-link', [PublicBookingController::class, 'telegramLink'])->middleware('throttle:10,1');
     Route::get('/bookings/{code}/reschedule-options', [PublicBookingController::class, 'rescheduleOptions'])->middleware('throttle:60,1');
     Route::post('/bookings/{code}/reschedule', [PublicBookingController::class, 'reschedule'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/cancel', [PublicBookingController::class, 'cancel'])->middleware('throttle:20,1');
@@ -125,6 +128,7 @@ Route::prefix('public')->group(function () {
     Route::get('/bookings/{code}', [PublicBookingController::class, 'show']);
     Route::post('/bookings/{code}/verify', [PublicBookingController::class, 'verifyPhone'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/resend', [PublicBookingController::class, 'resendCode'])->middleware('throttle:20,1');
+    Route::post('/bookings/{code}/telegram-link', [PublicBookingController::class, 'telegramLink'])->middleware('throttle:10,1');
     Route::get('/bookings/{code}/reschedule-options', [PublicBookingController::class, 'rescheduleOptions'])->middleware('throttle:60,1');
     Route::post('/bookings/{code}/reschedule', [PublicBookingController::class, 'reschedule'])->middleware('throttle:20,1');
     Route::post('/bookings/{code}/cancel', [PublicBookingController::class, 'cancel'])->middleware('throttle:20,1');
@@ -162,6 +166,7 @@ Route::get('/plans', [PublicPlanController::class, 'index']);
 */
 Route::post('/webhooks/payments/idbank', [BillingWebhookController::class, 'idbank']);
 Route::post('/webhooks/payments/idbank/mock-complete', [BillingWebhookController::class, 'hostedMockComplete']);
+Route::post('/webhooks/telegram', TelegramWebhookController::class)->middleware('throttle:120,1');
 
 /*
 |--------------------------------------------------------------------------
@@ -242,6 +247,9 @@ Route::post('/auth/social/exchange', [SocialAuthController::class, 'exchange'])
 Route::middleware(['auth:sanctum', 'ensure.business'])->group(function () {
     Route::get('/features', [FeaturesController::class, 'index'])->name('features.index');
     Route::post('/media/upload', [MediaController::class, 'upload'])->name('media.upload');
+    Route::get('/telegram/connection', [TelegramConnectionController::class, 'show'])->name('telegram.connection.show');
+    Route::post('/telegram/connection', [TelegramConnectionController::class, 'store'])->middleware('throttle:10,1')->name('telegram.connection.store');
+    Route::delete('/telegram/connection', [TelegramConnectionController::class, 'destroy'])->name('telegram.connection.destroy');
        Route::get('/business-types', [BusinessTypeController::class, 'show'])
         ->middleware('role:owner,manager')
         ->name('business.types.show');

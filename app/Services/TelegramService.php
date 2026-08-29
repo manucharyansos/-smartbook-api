@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Booking;
 use App\Models\Business;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -18,11 +19,13 @@ class TelegramService
 
     /**
      * @param array<int, string|int|null> $chatIds
+     * @return array{attempted:int,sent:int,failed:int}
      */
-    public function sendToMany(array $chatIds, string $message): void
+    public function sendToMany(array $chatIds, string $message): array
     {
         if (!$this->enabled()) {
-            return;
+            Log::warning('Telegram delivery skipped: bot is not configured or is disabled.');
+            return ['attempted' => 0, 'sent' => 0, 'failed' => 0];
         }
 
         $chatIds = collect($chatIds)
@@ -33,18 +36,24 @@ class TelegramService
 
         if ($chatIds->isEmpty()) {
             Log::info('Telegram booking notification skipped: no chat id configured.');
-            return;
+            return ['attempted' => 0, 'sent' => 0, 'failed' => 0];
         }
 
+        $sent = 0;
         foreach ($chatIds as $chatId) {
-            $this->send((string) $chatId, $message);
+            if ($this->send((string) $chatId, $message)) {
+                $sent++;
+            }
         }
+
+        $attempted = $chatIds->count();
+        return ['attempted' => $attempted, 'sent' => $sent, 'failed' => $attempted - $sent];
     }
 
-    public function send(string $chatId, string $message): void
+    public function send(string $chatId, string $message): bool
     {
         if (!$this->enabled() || trim($chatId) === '') {
-            return;
+            return false;
         }
 
         $token = (string) config('services.telegram.bot_token');
@@ -65,13 +74,63 @@ class TelegramService
                     'status' => $response->status(),
                     'body' => $response->body(),
                 ]);
+                return false;
             }
+
+            return true;
         } catch (\Throwable $e) {
             Log::warning('Telegram booking notification exception', [
                 'chat_id' => $chatId,
                 'error' => $e->getMessage(),
             ]);
+            return false;
         }
+    }
+
+    public function botUsername(): ?string
+    {
+        $configured = ltrim(trim((string) config('services.telegram.bot_username')), '@');
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        if (!$this->enabled()) {
+            return null;
+        }
+
+        $username = Cache::remember('telegram:bot-username', now()->addDay(), function (): ?string {
+            $token = (string) config('services.telegram.bot_token');
+
+            try {
+                $response = Http::timeout(8)
+                    ->retry(1, 250)
+                    ->get("https://api.telegram.org/bot{$token}/getMe");
+
+                if (!$response->successful() || !$response->json('ok')) {
+                    Log::warning('Telegram bot username lookup failed', ['status' => $response->status()]);
+                    return null;
+                }
+
+                $value = ltrim(trim((string) $response->json('result.username')), '@');
+                return $value !== '' ? $value : null;
+            } catch (\Throwable $exception) {
+                Log::warning('Telegram bot username lookup exception', ['error' => $exception->getMessage()]);
+                return null;
+            }
+        });
+
+        return is_string($username) && $username !== '' ? $username : null;
+    }
+
+    public function botUrl(?string $startPayload = null): ?string
+    {
+        $username = $this->botUsername();
+        if (!$username) {
+            return null;
+        }
+
+        $url = 'https://t.me/' . $username;
+        return $startPayload ? $url . '?start=' . rawurlencode($startPayload) : $url;
     }
 
     /**
@@ -149,7 +208,6 @@ class TelegramService
         $lines = [
             '✅ Նոր հաստատված ամրագրում',
             'Բիզնես՝ ' . ($business?->name ?? '—'),
-            'Կոդ՝ ' . ($booking->booking_code ?: '—'),
             'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
             'Հեռախոս՝ ' . ($booking->client_phone ?: '—'),
             'Ծառայություն՝ ' . $serviceLabel,
@@ -175,7 +233,6 @@ class TelegramService
         return implode("\n", [
             '❌ Ամրագրումը չեղարկվել է',
             'Բիզնես՝ ' . ($business?->name ?? '—'),
-            'Կոդ՝ ' . ($booking->booking_code ?: '—'),
             'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
             'Հեռախոս՝ ' . ($booking->client_phone ?: '—'),
             'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
@@ -194,7 +251,6 @@ class TelegramService
         $lines = [
             '✅ Քեզ նշանակված նոր ամրագրում',
             'Բիզնես՝ ' . ($business?->name ?? '—'),
-            'Կոդ՝ ' . ($booking->booking_code ?: '—'),
             'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
             'Հեռախոս՝ ' . ($booking->client_phone ?: '—'),
             'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
@@ -219,11 +275,55 @@ class TelegramService
         return implode("\n", [
             '❌ Քեզ նշանակված ամրագրումը չեղարկվել է',
             'Բիզնես՝ ' . ($business?->name ?? '—'),
-            'Կոդ՝ ' . ($booking->booking_code ?: '—'),
             'Հաճախորդ՝ ' . ($booking->client_name ?: '—'),
             'Հեռախոս՝ ' . ($booking->client_phone ?: '—'),
             'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
             'Ժամ՝ ' . $this->timesLabel($related, $tz),
+        ]);
+    }
+
+    public function customerBookingConfirmedMessage(Booking $booking, string $manageUrl): string
+    {
+        $booking->loadMissing(['business', 'service', 'staff', 'items.service']);
+        $related = $this->relatedBookings($booking);
+        $timezone = $booking->business?->effectiveTimezone() ?? 'Asia/Yerevan';
+
+        return implode("\n", [
+            '✅ Ձեր ամրագրումը հաստատված է',
+            'Բիզնես՝ ' . ($booking->business?->name ?? '—'),
+            'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
+            'Մասնագետ՝ ' . ($booking->staff?->name ?? '—'),
+            'Ժամ՝ ' . $this->timesLabel($related, $timezone),
+            'Կառավարել՝ ' . $manageUrl,
+        ]);
+    }
+
+    public function customerBookingCancelledMessage(Booking $booking): string
+    {
+        $booking->loadMissing(['business', 'service', 'items.service']);
+        $related = $this->relatedBookings($booking);
+        $timezone = $booking->business?->effectiveTimezone() ?? 'Asia/Yerevan';
+
+        return implode("\n", [
+            '❌ Ձեր ամրագրումը չեղարկվել է',
+            'Բիզնես՝ ' . ($booking->business?->name ?? '—'),
+            'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
+            'Ժամ՝ ' . $this->timesLabel($related, $timezone),
+        ]);
+    }
+
+    public function customerBookingRescheduledMessage(Booking $booking, string $oldTime, string $newTime, string $manageUrl): string
+    {
+        $booking->loadMissing(['business', 'service', 'items.service']);
+        $related = $this->relatedBookings($booking);
+
+        return implode("\n", [
+            '🔁 Ձեր ամրագրման ժամը փոխվել է',
+            'Բիզնես՝ ' . ($booking->business?->name ?? '—'),
+            'Ծառայություն՝ ' . $this->servicesLabel($booking, $related),
+            'Նախկին ժամ՝ ' . $oldTime,
+            'Նոր ժամ՝ ' . $newTime,
+            'Կառավարել՝ ' . $manageUrl,
         ]);
     }
 

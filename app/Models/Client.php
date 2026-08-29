@@ -16,6 +16,7 @@ class Client extends Model
         'name',
         'phone',
         'email',
+        'telegram_chat_id',
         'marketing_opt_in',
         'marketing_opted_in_at',
         'marketing_unsubscribed_at',

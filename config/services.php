@@ -109,8 +109,18 @@ return [
     ],
 
     'telegram' => [
-        'enabled' => filter_var(env('TELEGRAM_BOOKING_NOTIFICATIONS_ENABLED', false), FILTER_VALIDATE_BOOL),
+        // A configured bot should deliver notifications by default. The old
+        // ENABLED switch is retained for compatibility, while the explicit
+        // DISABLED switch is the emergency off switch.
+        'enabled' => (
+            filter_var(env('TELEGRAM_BOOKING_NOTIFICATIONS_ENABLED', false), FILTER_VALIDATE_BOOL)
+            || trim((string) env('TELEGRAM_BOT_TOKEN', '')) !== ''
+        ) && !filter_var(env('TELEGRAM_BOOKING_NOTIFICATIONS_DISABLED', false), FILTER_VALIDATE_BOOL),
         'bot_token' => env('TELEGRAM_BOT_TOKEN'),
+        'bot_username' => env('TELEGRAM_BOT_USERNAME'),
+        'webhook_url' => env('TELEGRAM_WEBHOOK_URL', rtrim((string) env('APP_URL', ''), '/') . '/api/webhooks/telegram'),
+        'webhook_secret' => env('TELEGRAM_WEBHOOK_SECRET'),
+        'link_ttl_minutes' => max(5, (int) env('TELEGRAM_LINK_TTL_MINUTES', 15)),
         'booking_chat_id' => env('TELEGRAM_BOOKING_CHAT_ID'),
         'booking_chat_ids' => array_values(array_filter(array_map('trim', explode(',', (string) env('TELEGRAM_BOOKING_CHAT_IDS', ''))))),
     ],
