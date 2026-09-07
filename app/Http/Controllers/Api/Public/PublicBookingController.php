@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 36132)
-Total output lines: 3243
-
 <?php
 // app/Http/Controllers/Api/Public/PublicBookingController.php
 
@@ -1303,7 +1300,537 @@ class PublicBookingController extends Controller
      * POST /api/public/businesses/{slug}/bookings
      * Creates booking in "pending" but hides from staff until phone verified.
      */
-    public function st…6132 tokens truncated…->json([
+    public function store(string $slug, Request $request, AvailabilityService $availability, SmsService $sms)
+    {
+        $data = $request->validate([
+            'service_id'    => ['required', 'integer', 'exists:services,id'],
+            'staff_id'      => ['nullable', 'integer', 'exists:users,id'],
+            'starts_at'     => ['required', 'date_format:Y-m-d H:i'],
+            'client_name'   => ['required', 'string', 'min:2', 'max:120'],
+            'client_phone'  => ['required', 'string', 'min:5', 'max:40'],
+            'client_email'  => ['required', 'string', 'email', 'max:150'],
+            'notes'         => ['nullable', 'string', 'max:2000'],
+            'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
+            'location_id'   => ['nullable', 'integer'],
+            'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
+            'marketing_opt_in' => ['nullable', 'boolean'],
+            'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
+            'gift_card_code' => ['nullable', 'string', 'max:40'],
+            'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
+            'recurrence_frequency' => ['nullable', 'in:weekly,biweekly,monthly'],
+            'recurrence_count' => ['nullable', 'integer', 'min:1', 'max:12'],
+        ]);
+
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
+
+        $service = Service::query()
+            ->where('id', (int)$data['service_id'])
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->when(!empty($data['location_id']), fn ($q) => $this->applyLocationCompatibility($q, (int) $data['location_id']))
+            ->firstOrFail();
+
+        $partySize = max(1, (int) ($data['party_size'] ?? 1));
+        $recurrenceCount = max(1, (int) ($data['recurrence_count'] ?? 1));
+        $recurrenceFrequency = $recurrenceCount > 1 ? ($data['recurrence_frequency'] ?? null) : null;
+        if ($recurrenceCount > 1 && !$recurrenceFrequency) {
+            return response()->json(['message' => 'Choose a recurrence frequency.'], 422);
+        }
+        if (($service->booking_mode ?? 'individual') !== 'group' && $partySize > 1) {
+            return response()->json(['message' => 'This service accepts one customer per booking.'], 422);
+        }
+        if ($partySize > max(1, (int) ($service->capacity ?? 1))) {
+            return response()->json(['message' => 'The group size exceeds the service capacity.'], 422);
+        }
+
+        // pick staff
+        $staffId = (int)($data['staff_id'] ?? 0);
+        if (!$staffId) {
+            $staffId = (int) User::query()
+                ->where('business_id', $business->id)
+                ->when(!empty($data['location_id']), fn ($q) => $this->applyLocationCompatibility($q, (int) $data['location_id'], 'users'))
+                ->where('is_active', true)
+                ->where('is_bookable', true)
+                ->orderBy('id')
+                ->value('id');
+        }
+        if (!$staffId) return response()->json(['message' => 'No staff available.'], 422);
+
+        $staff = User::query()
+            ->where('id', $staffId)
+            ->where('business_id', $business->id)
+            ->when(!empty($data['location_id']), fn ($q) => $this->applyLocationCompatibility($q, (int) $data['location_id'], 'users'))
+            ->where('is_active', true)
+            ->where('is_bookable', true)
+            ->first();
+        if (!$staff) return response()->json(['message' => 'Invalid staff.'], 422);
+
+        // normalize phone
+        $phoneNorm = Phone::normalizeAM($data['client_phone']);
+        if (!$phoneNorm) {
+            return response()->json(['message' => 'Invalid phone number'], 422);
+        }
+
+        // check slot in business local time
+        $tz = $business->effectiveTimezone();
+        $step = max(5, min(60, (int)($business->slot_step_minutes ?? 15)));
+        try {
+            $startsAt = Carbon::createFromFormat('Y-m-d H:i', $data['starts_at'], $tz)->seconds(0);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Invalid starts_at'], 422);
+        }
+        $startsAt = $this->snapToStep($startsAt, $step);
+        $date = $startsAt->format('Y-m-d');
+        $time = $startsAt->format('H:i');
+
+        $slots = $availability->slotsForDay(
+            staffId: $staff->id,
+            serviceId: $service->id,
+            date: $date,
+            businessId: $business->id,
+            locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+            partySize: $partySize,
+        );
+        $ok = collect($slots)->contains(fn($s) => substr($s['starts_at'], 11, 5) === $time);
+        if (!$ok) return response()->json(['message' => 'Selected time is not available. Please refresh available times and try again.'], 422);
+
+        $endsAt = $startsAt->copy()->addMinutes((int)$service->duration_minutes);
+        try {
+            $this->assertWithinBusinessHours($business, $startsAt, $endsAt);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['message' => $e->validator->errors()->first() ?: 'Selected time is outside business hours.'], 422);
+        }
+
+        $startsAtUtc = $startsAt->copy()->setTimezone('UTC');
+        $endsAtUtc = $endsAt->copy()->setTimezone('UTC');
+
+        $occurrences = [['start' => $startsAtUtc, 'end' => $endsAtUtc]];
+        for ($index = 1; $index < $recurrenceCount; $index++) {
+            $occurrenceStart = match ($recurrenceFrequency) {
+                'weekly' => $startsAt->copy()->addWeeks($index),
+                'biweekly' => $startsAt->copy()->addWeeks($index * 2),
+                'monthly' => $startsAt->copy()->addMonthsNoOverflow($index),
+                default => $startsAt->copy(),
+            };
+            $occurrenceEnd = $occurrenceStart->copy()->addMinutes((int) $service->duration_minutes);
+            $this->assertWithinBusinessHours($business, $occurrenceStart, $occurrenceEnd);
+            $occurrenceSlots = $availability->slotsForDay(
+                staffId: $staff->id,
+                serviceId: $service->id,
+                date: $occurrenceStart->format('Y-m-d'),
+                businessId: $business->id,
+                locationId: !empty($data['location_id']) ? (int) $data['location_id'] : null,
+                partySize: $partySize,
+            );
+            $occurrenceTime = $occurrenceStart->format('H:i');
+            if (!collect($occurrenceSlots)->contains(fn ($slot) => substr($slot['starts_at'], 11, 5) === $occurrenceTime)) {
+                return response()->json([
+                    'message' => 'A recurring date is unavailable: ' . $occurrenceStart->format('Y-m-d H:i'),
+                    'unavailable_date' => $occurrenceStart->format('Y-m-d'),
+                ], 422);
+            }
+            $occurrences[] = [
+                'start' => $occurrenceStart->copy()->timezone('UTC'),
+                'end' => $occurrenceEnd->copy()->timezone('UTC'),
+            ];
+        }
+
+        // create/find client inside this business
+        $client = Client::query()
+            ->where('business_id', $business->id)
+            ->where('phone', $phoneNorm)
+            ->first();
+        if (!$client) {
+            $client = Client::query()->create([
+                'business_id' => $business->id,
+                'name'        => $data['client_name'],
+                'phone'       => $phoneNorm,
+                'email'       => Booking::normalizeContactEmail($data['client_email'] ?? null),
+                'marketing_opt_in' => (bool) ($data['marketing_opt_in'] ?? false),
+                'marketing_opted_in_at' => !empty($data['marketing_opt_in']) ? now() : null,
+            ]);
+        } else {
+            // Update client name and email if provided
+            $client->name = $data['client_name'];
+            if (isset($data['client_email'])) {
+                $client->email = Booking::normalizeContactEmail($data['client_email']);
+            }
+            if (!empty($data['marketing_opt_in'])) {
+                $client->marketing_opt_in = true;
+                $client->marketing_opted_in_at = now();
+                $client->marketing_unsubscribed_at = null;
+            }
+            $client->save();
+        }
+
+        app(ClientIdentityLinker::class)->linkClientProfile($client);
+        $clientEmailSnapshot = Booking::normalizeContactEmail(
+            $data['client_email'] ?? $client->email
+        );
+
+        $code = (string)random_int(1000, 9999);
+        $expires = now()->addMinutes(10);
+
+        $resolvedLocationId = $this->resolveBookingLocationId($business, !empty($data['location_id']) ? (int) $data['location_id'] : null, $service, $staff);
+
+        $bookingPayload = [
+            'business_id'   => $business->id,
+            'service_id'    => $service->id,
+            'staff_id'      => $staff->id,
+            'location_id'   => $resolvedLocationId,
+            'party_size'    => $partySize,
+            'client_id'     => $client->id,
+            'room_id'       => ($business->isHealthcareVertical()) ? ($data['room_id'] ?? null) : null,
+            'starts_at'     => $startsAtUtc->format('Y-m-d H:i:s'),
+            'ends_at'       => $endsAtUtc->format('Y-m-d H:i:s'),
+            'client_name'   => $data['client_name'],
+            'client_phone'  => $phoneNorm,
+            'client_email'  => $clientEmailSnapshot,
+            'notes'         => $data['notes'] ?? null,
+            'source'        => $data['source'] ?? 'website',
+            'status'        => 'pending',
+            'booking_code'  => strtoupper(Str::random(8)),
+            'final_price'   => $service->price === null ? null : (int) $service->price * $partySize,
+            'currency'      => $service->currency ?? 'AMD',
+
+            'phone_verification_code_hash' => Hash::make($code),
+            'phone_verification_expires_at' => $expires,
+            'phone_verified_at' => null,
+            'phone_verification_attempts' => 0,
+        ];
+
+        $recurrenceId = $recurrenceCount > 1 ? (string) Str::uuid() : null;
+        $createdBookings = [];
+        $booking = DB::transaction(function () use ($staff, $business, $service, $partySize, $bookingPayload, $occurrences, $recurrenceId, $recurrenceFrequency, $recurrenceCount, &$createdBookings) {
+            User::query()->whereKey($staff->id)->lockForUpdate()->firstOrFail();
+            $root = null;
+            foreach ($occurrences as $index => $occurrence) {
+                if (!app(WaitlistService::class)->slotCanFit($business, $service, (int) $staff->id, $occurrence['start'], $occurrence['end'], $partySize)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'starts_at' => 'A selected recurring time is no longer available.',
+                    ]);
+                }
+                $payload = array_merge($bookingPayload, [
+                    'group_id' => $recurrenceId,
+                    'recurrence_id' => $recurrenceId,
+                    'recurrence_frequency' => $recurrenceFrequency,
+                    'recurrence_index' => $index + 1,
+                    'recurrence_count' => $recurrenceCount,
+                    'starts_at' => $occurrence['start']->format('Y-m-d H:i:s'),
+                    'ends_at' => $occurrence['end']->format('Y-m-d H:i:s'),
+                    'booking_code' => $index === 0 ? $bookingPayload['booking_code'] : strtoupper(Str::random(8)),
+                ]);
+                $current = Booking::query()->create($this->withoutUnavailableLocationAttribute($payload, 'bookings'));
+                $root ??= $current;
+                $createdBookings[] = $current;
+            }
+            return $root;
+        });
+
+        $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($booking->final_price ?? 0));
+
+        $verificationDelivery = $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
+
+        return response()->json([
+            'data' => [
+                'booking_code' => $booking->booking_code,
+                'needs_phone_verification' => true,
+                'phone' => $phoneNorm,
+                'expires_at' => $expires->toISOString(),
+                'recurrence_id' => $recurrenceId,
+                'recurrence_count' => count($createdBookings),
+                'verification_delivery' => $verificationDelivery,
+            ],
+            'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
+        ], 201);
+    }
+
+
+    private function applyPublicBookingBenefits(Booking $booking, Client $client, array $payload, int $grossAmount): void
+    {
+        if ($grossAmount <= 0) {
+            return;
+        }
+
+        $requestedPoints = (int) ($payload['redeem_points'] ?? 0);
+        $giftCardCode = trim((string) ($payload['gift_card_code'] ?? ''));
+        $requestedGiftAmount = (int) ($payload['gift_card_amount'] ?? 0);
+
+        if ($requestedPoints <= 0 && $giftCardCode === '') {
+            return;
+        }
+
+        $systemActor = User::query()
+            ->where('business_id', $booking->business_id)
+            ->whereIn('role', [User::ROLE_OWNER, User::ROLE_MANAGER])
+            ->orderBy('id')
+            ->first();
+        if (!$systemActor) {
+            return;
+        }
+
+        $netAmount = $grossAmount;
+        $appliedPoints = 0;
+        $loyaltyDiscount = 0;
+        $giftDiscount = 0;
+
+        if ($requestedPoints > 0) {
+            $loyaltyService = app(LoyaltyService::class);
+            $program = $loyaltyService->getOrCreateProgram((int) $booking->business_id);
+            if ($giftCardCode !== '' && !$program->allow_gift_card_with_points) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['gift_card_code' => ['Միաժամանակ միավոր և նվերի քարտ օգտագործել չի թույլատրվում։']]);
+            }
+            $result = $loyaltyService->redeemForBooking($systemActor, $client, $booking, $requestedPoints, $grossAmount);
+            $appliedPoints = (int) ($result['applied_points'] ?? 0);
+            $loyaltyDiscount = (int) ($result['discount_amount'] ?? 0);
+            $netAmount -= $loyaltyDiscount;
+        }
+
+        if ($giftCardCode !== '') {
+            $giftService = app(GiftCardService::class);
+            $giftCard = $giftService->lookupActiveByCode((int) $booking->business_id, $giftCardCode);
+            $giftResult = $giftService->redeemForBooking($systemActor, $giftCard, $booking, $requestedGiftAmount > 0 ? $requestedGiftAmount : $netAmount);
+            $giftDiscount = (int) ($giftResult['amount'] ?? 0);
+            $netAmount -= $giftDiscount;
+        }
+
+        $booking->final_price = max(0, $netAmount);
+        $booking->source_meta = array_merge((array) ($booking->source_meta ?? []), [
+            'gross_amount' => $grossAmount,
+            'loyalty_applied_points' => $appliedPoints,
+            'loyalty_discount_amount' => $loyaltyDiscount,
+            'gift_card_code' => $giftCardCode !== '' ? strtoupper($giftCardCode) : null,
+            'gift_card_discount_amount' => $giftDiscount,
+        ]);
+        $booking->save();
+    }
+
+    private function assertWithinBusinessHours(Business $business, Carbon $startLocal, Carbon $endLocal, string $field = 'starts_at'): void
+    {
+        $workStart = $business->work_start ?: '09:00';
+        $workEnd = $business->work_end ?: '18:00';
+
+        $windowStart = Carbon::parse($startLocal->format('Y-m-d') . ' ' . $workStart, $startLocal->getTimezone())->seconds(0);
+        $windowEnd = Carbon::parse($startLocal->format('Y-m-d') . ' ' . $workEnd, $startLocal->getTimezone())->seconds(0);
+        if ($windowEnd->lte($windowStart)) {
+            $windowEnd = $windowEnd->addDay();
+        }
+
+        if ($startLocal->lt($windowStart) || $endLocal->gt($windowEnd)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                $field => ['Selected time is outside business working hours.'],
+            ]);
+        }
+    }
+
+    private function assertSingleBookingServicesCompatible($services, ?User $staff = null, bool $requireBookable = false): void
+    {
+        $services = collect($services)->filter();
+        if ($services->isEmpty()) {
+            return;
+        }
+
+        $serviceLocationIds = $services
+            ->map(fn (Service $service) => (int) ($service->location_id ?? 0))
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values();
+
+        foreach ($services as $service) {
+            if (!(bool) $service->is_active) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'service_id' => ['Selected service is inactive.'],
+                ]);
+            }
+        }
+
+        if ($serviceLocationIds->count() > 1) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'service_id' => ['Selected services must belong to the same location.'],
+            ]);
+        }
+
+        if ($staff) {
+            if (!(bool) $staff->is_active) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'staff_id' => ['Selected staff member is inactive.'],
+                ]);
+            }
+
+            if ($requireBookable && !(bool) $staff->is_bookable) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'staff_id' => ['Selected staff member is not bookable.'],
+                ]);
+            }
+
+            if ($staff->location_id && $serviceLocationIds->count() === 1 && (int) $staff->location_id !== (int) $serviceLocationIds->first()) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'staff_id' => ['Selected staff member does not work at the service location.'],
+                ]);
+            }
+        }
+    }
+
+    private function assertPreparedLinesDoNotOverlap(array $prepared): void
+    {
+        foreach ($prepared as $index => $current) {
+            for ($j = $index + 1; $j < count($prepared); $j++) {
+                $other = $prepared[$j];
+                if ((int) $current['staff']->id !== (int) $other['staff']->id) {
+                    continue;
+                }
+
+                if ($current['startUtc']->lt($other['endUtc']) && $current['endUtc']->gt($other['startUtc'])) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'lines' => ['One staff member has overlapping lines in the same booking request.'],
+                    ]);
+                }
+            }
+        }
+    }
+
+    private function resolveBookingLocationId(Business $business, ?int $requestedLocationId = null, ?Service $service = null, ?User $staff = null): ?int
+    {
+        $resolvedLocationId = $requestedLocationId
+            ?: (int) ($service?->location_id ?? 0)
+            ?: (int) ($staff?->location_id ?? 0)
+            ?: (int) ($business->locations()->where('is_primary', true)->value('id') ?? 0)
+            ?: (int) ($business->locations()->orderBy('sort_order')->orderBy('id')->value('id') ?? 0);
+
+        if (!$resolvedLocationId) {
+            return null;
+        }
+
+        $location = BusinessLocation::query()
+            ->where('business_id', $business->id)
+            ->find($resolvedLocationId);
+
+        if (!$location) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['location_id' => ['Invalid location.']]);
+        }
+
+        if ($service && $service->location_id && (int) $service->location_id !== (int) $location->id) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['location_id' => ['Selected service belongs to another location.']]);
+        }
+
+        if ($staff && $staff->location_id && (int) $staff->location_id !== (int) $location->id) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['location_id' => ['Selected staff belongs to another location.']]);
+        }
+
+        return (int) $location->id;
+    }
+
+    /**
+     * POST /api/public/bookings/{code}/verify
+     */
+    public function verifyPhone(string $code, Request $request)
+    {
+        $data = $request->validate([
+            'otp' => ['required','string','min:4','max:8'],
+        ]);
+
+        $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+
+        if ($booking->phone_verified_at) {
+            $plainToken = $this->issueGuestAccessForBooking($booking);
+            return response()->json([
+                'ok' => true,
+                'already' => true,
+                'manage_token' => $plainToken,
+                'manage_url' => $this->frontendManageUrl($booking, $plainToken),
+                'data' => $this->publicBookingPayload($booking),
+            ]);
+        }
+
+        if (!$booking->phone_verification_expires_at || now()->greaterThan($booking->phone_verification_expires_at)) {
+            return response()->json(['message' => 'Code expired. Please request a new code.'], 422);
+        }
+
+        if ($booking->phone_verification_attempts >= 5) {
+            return response()->json(['message' => 'Too many attempts.'], 429);
+        }
+
+        $booking->increment('phone_verification_attempts');
+
+        if (!Hash::check($data['otp'], (string)$booking->phone_verification_code_hash)) {
+            return response()->json(['message' => 'Invalid code'], 422);
+        }
+
+        $now = now();
+        $query = Booking::query()->where('client_id', $booking->client_id);
+        if ($booking->group_id) {
+            $query->where('group_id', $booking->group_id);
+        } else {
+            $query->where('id', $booking->id);
+        }
+
+        $query->update([
+            'phone_verified_at' => $now,
+            'phone_verification_code_hash' => null,
+            'phone_verification_expires_at' => null,
+            'phone_verification_attempts' => 0,
+            'status' => 'confirmed',
+        ]);
+
+        $booking->refresh();
+        $plainToken = $this->issueGuestAccessForBooking($booking);
+        $this->sendBookingConfirmedNotifications($booking, $plainToken);
+        $this->sendBusinessBookingEmailNotifications($booking);
+        $this->sendBookingTelegramNotifications($booking, 'confirmed', $plainToken);
+
+        return response()->json([
+            'ok' => true,
+            'manage_token' => $plainToken,
+            'manage_url' => $this->frontendManageUrl($booking, $plainToken),
+            'data' => $this->publicBookingPayload($booking),
+        ]);
+    }
+
+    public function resendCode(string $code, Request $request)
+    {
+        $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+
+        if ($booking->phone_verified_at) {
+            $plainToken = $this->issueGuestAccessForBooking($booking);
+            return response()->json([
+                'ok' => true,
+                'already' => true,
+                'manage_token' => $plainToken,
+                'manage_url' => $this->frontendManageUrl($booking, $plainToken),
+                'data' => $this->publicBookingPayload($booking),
+            ]);
+        }
+
+        $codeValue = (string) random_int(1000, 9999);
+        $expires = now()->addMinutes(10);
+
+        $query = Booking::query()->where('client_id', $booking->client_id);
+        if ($booking->group_id) {
+            $query->where('group_id', $booking->group_id);
+        } else {
+            $query->where('id', $booking->id);
+        }
+
+        $query->update([
+            'phone_verification_code_hash' => Hash::make($codeValue),
+            'phone_verification_expires_at' => $expires,
+            'phone_verification_attempts' => 0,
+        ]);
+
+        $booking->refresh();
+        $email = $booking->contactEmail();
+        $delivery = $this->sendVerificationNotifications($booking, $codeValue, $expires, $email);
+
+        if (!$delivery['email'] && !$delivery['telegram']) {
+            return response()->json([
+                'message' => 'Հաստատման կոդը չհաջողվեց ուղարկել։ Խնդրում ենք փորձել կրկին։',
+                'expires_at' => $expires->toISOString(),
+                'verification_delivery' => $delivery,
+            ], 503);
+        }
+
+        return response()->json([
             'ok' => true,
             'expires_at' => $expires->toISOString(),
             'message' => 'A new verification code has been sent.',
@@ -1697,13 +2224,6 @@ class PublicBookingController extends Controller
             'reschedule_cutoff_hours' => $this->rescheduleCutoffHours(),
             'total_price' => $totalPrice,
             'currency' => $booking->currency ?? $related->first()?->currency,
-            'payment' => [
-                'deposit_available' => (bool) config('booking_payments.enabled')
-                    && $totalPrice !== null
-                    && $totalPrice > 0
-                    && !in_array($booking->status, ['cancelled', 'done', 'completed', 'no_show'], true),
-                'deposit_percent' => (int) config('booking_payments.deposit_percent', 20),
-            ],
             'business' => $booking->business,
             'primary_booking' => $publicBookings->first(),
             'bookings' => $publicBookings,
