@@ -62,6 +62,7 @@ use App\Http\Controllers\Api\BillingMeController;
 use App\Http\Controllers\Api\BillingPaymentController;
 use App\Http\Controllers\Api\BillingWebhookController;
 use App\Http\Controllers\Api\MobileDeviceController;
+use App\Http\Controllers\Api\Public\BookingPaymentController;
 
 /*
 |--------------------------------------------------------------------------
@@ -168,6 +169,11 @@ Route::get('/plans', [PublicPlanController::class, 'index']);
 Route::post('/webhooks/payments/idbank', [BillingWebhookController::class, 'idbank']);
 Route::post('/webhooks/payments/idbank/mock-complete', [BillingWebhookController::class, 'hostedMockComplete']);
 Route::post('/webhooks/telegram', TelegramWebhookController::class)->middleware('throttle:120,1');
+
+Route::post('/public/bookings/{code}/payments/idbank/session', [BookingPaymentController::class, 'session'])->middleware('throttle:10,1');
+Route::get('/public/bookings/{code}/payments/{payment}/status', [BookingPaymentController::class, 'status'])->middleware('throttle:60,1');
+Route::get('/public/booking-payments/mock/{reference}', [BookingPaymentController::class, 'mockPage'])->middleware('throttle:60,1');
+Route::post('/public/booking-payments/mock/{reference}/complete', [BookingPaymentController::class, 'mockComplete'])->middleware('throttle:20,1');
 
 Route::prefix('mobile')->middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
     Route::post('/devices', [MobileDeviceController::class, 'store']);

@@ -101,6 +101,11 @@ class Booking extends Model
         return $this->belongsTo(Room::class);
     }
 
+    public function payments()
+    {
+        return $this->hasMany(BookingPayment::class);
+    }
+
     public function isPhoneVerified(): bool
     {
         return (bool)$this->phone_verified_at;
