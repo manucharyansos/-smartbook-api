@@ -63,6 +63,7 @@ use App\Http\Controllers\Api\BillingPaymentController;
 use App\Http\Controllers\Api\BillingWebhookController;
 use App\Http\Controllers\Api\MobileDeviceController;
 use App\Http\Controllers\Api\Public\BookingPaymentController;
+use App\Http\Controllers\Api\AccountDeletionController;
 
 /*
 |--------------------------------------------------------------------------
@@ -179,6 +180,7 @@ Route::post('/public/booking-payments/mock/{reference}/complete', [BookingPaymen
 Route::prefix('mobile')->middleware(['auth:sanctum', 'throttle:60,1'])->group(function () {
     Route::post('/devices', [MobileDeviceController::class, 'store']);
     Route::delete('/devices/current', [MobileDeviceController::class, 'destroyCurrent']);
+    Route::post('/account-deletion-request', [AccountDeletionController::class, 'store'])->middleware('throttle:3,60');
 });
 
 /*
