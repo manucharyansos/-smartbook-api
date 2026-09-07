@@ -3,6 +3,7 @@
 namespace App\Notifications;
 
 use App\Models\Booking;
+use App\Notifications\Channels\ExpoPushChannel;
 use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
@@ -22,7 +23,7 @@ class BookingRescheduledNotification extends Notification
 
     public function via($notifiable): array
     {
-        return ['mail'];
+        return ['mail', ExpoPushChannel::class];
     }
 
     public function toMail($notifiable): MailMessage
@@ -48,5 +49,19 @@ class BookingRescheduledNotification extends Notification
                 'Բացել օրացույցը',
                 rtrim((string) config('services.public_booking.frontend_url', 'https://vizit.am'), '/') . '/app/calendar',
             );
+    }
+
+    public function toExpoPush($notifiable): array
+    {
+        return [
+            'title' => 'Ամրագրման ժամը փոխվել է',
+            'body' => ($this->booking->client_name ?: 'Հաճախորդ') . ' · ' . ($this->booking->starts_at?->format('d.m H:i') ?: ''),
+            'data' => [
+                'type' => 'booking.rescheduled',
+                'audience' => 'business',
+                'booking_id' => $this->booking->id,
+                'booking_code' => $this->booking->booking_code,
+            ],
+        ];
     }
 }

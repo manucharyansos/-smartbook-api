@@ -125,4 +125,9 @@ return [
         'booking_chat_ids' => array_values(array_filter(array_map('trim', explode(',', (string) env('TELEGRAM_BOOKING_CHAT_IDS', ''))))),
     ],
 
+    'expo' => [
+        'push_url' => env('EXPO_PUSH_URL', 'https://exp.host/--/api/v2/push/send'),
+        'access_token' => env('EXPO_ACCESS_TOKEN'),
+    ],
+
 ];
