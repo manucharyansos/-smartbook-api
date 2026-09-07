@@ -12,6 +12,22 @@ use Illuminate\Support\Str;
 
 class BookingPaymentController extends Controller
 {
+    public function capabilities(string $code, Request $request)
+    {
+        $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+        $this->assertGuestAccess($booking, (string) $request->header('X-Guest-Token'));
+        $related = Booking::query()->where('client_id', $booking->client_id)
+            ->when($booking->group_id, fn ($q) => $q->where('group_id', $booking->group_id), fn ($q) => $q->whereKey($booking->id))->get();
+        $total = $related->contains(fn ($item) => $item->final_price === null)
+            ? null
+            : (int) $related->sum(fn ($item) => (int) $item->final_price);
+        return response()->json(['data' => [
+            'deposit_available' => (bool) config('booking_payments.enabled') && $total !== null && $total > 0
+                && !in_array($booking->status, ['cancelled', 'done', 'completed', 'no_show'], true),
+            'deposit_percent' => (int) config('booking_payments.deposit_percent', 20),
+        ]]);
+    }
+
     public function session(string $code, Request $request)
     {
         abort_unless(config('booking_payments.enabled'), 503, 'Booking payments are not enabled.');
