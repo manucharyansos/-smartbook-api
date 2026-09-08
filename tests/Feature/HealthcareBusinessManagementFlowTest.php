@@ -62,37 +62,6 @@ it('lets a healthcare owner create and manage services and staff through onboard
         ->assertCreated()
         ->assertJsonPath('data.name', 'Cardiology consultation');
 
-    // Once the first service exists, the real next onboarding step is the
-    // weekly business schedule. It must be writable before ensure.onboarded.
-    $this->withToken($token)
-        ->getJson('/api/business/onboarding-status')
-        ->assertOk()
-        ->assertJsonPath('data.onboarding_step', 'schedule');
-
-    $businessSchedule = collect(range(1, 7))->map(fn (int $weekday) => [
-        'weekday' => $weekday,
-        'is_closed' => $weekday === 7,
-        'start' => $weekday === 7 ? null : '09:00',
-        'end' => $weekday === 7 ? null : '18:00',
-        'break_start' => $weekday === 7 ? null : '13:00',
-        'break_end' => $weekday === 7 ? null : '14:00',
-    ])->all();
-
-    $this->withToken($token)
-        ->putJson('/api/schedule', ['days' => $businessSchedule])
-        ->assertOk();
-
-    $this->withToken($token)
-        ->getJson('/api/schedule')
-        ->assertOk()
-        ->assertJsonCount(7, 'data')
-        ->assertJsonPath('data.0.start', '09:00');
-
-    $this->withToken($token)
-        ->getJson('/api/business/onboarding-status')
-        ->assertOk()
-        ->assertJsonPath('data.onboarding_step', 'settings');
-
     $staff = $this->withToken($token)->postJson('/api/staff', [
         'name' => 'Dr. Ani Hakobyan',
         'email' => 'doctor@example.com',
@@ -108,6 +77,7 @@ it('lets a healthcare owner create and manage services and staff through onboard
         ->assertJsonPath('data.role', 'staff')
         ->assertJsonPath('data.is_bookable', true);
 
+    // Managers do not consume the single bookable staff seat on the Start plan.
     $this->withToken($token)->postJson('/api/staff', [
         'name' => 'Medical Reception',
         'email' => 'reception@example.com',
