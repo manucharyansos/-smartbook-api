@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Models\ClientAccount;
 use App\Models\User;
 use App\Policies\StaffPolicy;
+use App\Services\AvailabilityService;
+use App\Services\ScheduleAwareAvailabilityService;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
@@ -16,7 +18,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(AvailabilityService::class, ScheduleAwareAvailabilityService::class);
     }
 
     /**
