@@ -2,8 +2,11 @@
 
 namespace App\Models;
 
+use App\Services\ScheduleWindowService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class Booking extends Model
 {
@@ -37,8 +40,6 @@ class Booking extends Model
         'clinical_notes',
         'treatment_codes',
         'is_emergency',
-
-        // phone verification (public booking)
         'phone_verification_code_hash',
         'phone_verification_expires_at',
         'phone_verified_at',
@@ -62,6 +63,45 @@ class Booking extends Model
         'guest_access_expires_at' => 'datetime',
     ];
 
+    protected static function booted(): void
+    {
+        static::creating(fn (Booking $booking) => $booking->validateStructuredSchedule());
+        static::updating(function (Booking $booking) {
+            if ($booking->isDirty(['business_id', 'staff_id', 'starts_at', 'ends_at'])) {
+                $booking->validateStructuredSchedule();
+            }
+        });
+    }
+
+    private function validateStructuredSchedule(): void
+    {
+        if (!$this->business_id || !$this->staff_id || !$this->starts_at || !$this->ends_at) return;
+
+        $business = Business::query()->find((int) $this->business_id);
+        $staff = User::query()->where('business_id', (int) $this->business_id)->find((int) $this->staff_id);
+        if (!$business || !$staff) return;
+
+        $timezone = $business->effectiveTimezone();
+        try {
+            $start = $this->starts_at instanceof Carbon
+                ? $this->starts_at->copy()->timezone($timezone)
+                : Carbon::parse($this->starts_at, 'UTC')->timezone($timezone);
+            $end = $this->ends_at instanceof Carbon
+                ? $this->ends_at->copy()->timezone($timezone)
+                : Carbon::parse($this->ends_at, 'UTC')->timezone($timezone);
+        } catch (\Throwable) {
+            return;
+        }
+
+        $resolver = app(ScheduleWindowService::class);
+        if (!$resolver->shouldEnforce($business, $staff, $start)) return;
+        if ($resolver->contains($business, $start, $end, $staff)) return;
+
+        throw ValidationException::withMessages([
+            'starts_at' => ['Selected time is outside the configured business or staff working schedule.'],
+        ]);
+    }
+
     public function business()
     {
         return $this->belongsTo(Business::class);
@@ -77,10 +117,6 @@ class Booking extends Model
         return $this->belongsTo(Service::class);
     }
 
-    /**
-     * Multi-service booking items (Phase 3A).
-     * If empty, booking falls back to single service_id.
-     */
     public function items()
     {
         return $this->hasMany(BookingItem::class)->orderBy('position');
@@ -108,14 +144,9 @@ class Booking extends Model
 
     public function isPhoneVerified(): bool
     {
-        return (bool)$this->phone_verified_at;
+        return (bool) $this->phone_verified_at;
     }
 
-    /**
-     * Booking contact data is an immutable historical snapshot. The migration
-     * backfills legacy bookings once; runtime reads must never follow later
-     * changes made to the shared client profile.
-     */
     public function contactEmail(): ?string
     {
         return self::normalizeContactEmail($this->client_email);
@@ -124,7 +155,6 @@ class Booking extends Model
     public static function normalizeContactEmail(?string $email): ?string
     {
         $email = trim((string) $email);
-
         return $email !== '' ? mb_strtolower($email) : null;
     }
 }
