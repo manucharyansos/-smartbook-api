@@ -745,7 +745,7 @@ class PublicBookingController extends Controller
             'notes'         => ['nullable', 'string', 'max:2000'],
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
-            'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'source'        => ['nullable', 'in:website,mobile,instagram,facebook,whatsapp,widget,partner,qr'],
             'marketing_opt_in' => ['nullable', 'boolean'],
             'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'gift_card_code' => ['nullable', 'string', 'max:40'],
@@ -996,7 +996,7 @@ class PublicBookingController extends Controller
             'notes'               => ['nullable', 'string', 'max:2000'],
             'room_id'             => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'         => ['nullable', 'integer'],
-            'source'              => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'source'              => ['nullable', 'in:website,mobile,instagram,facebook,whatsapp,widget,partner,qr'],
             'marketing_opt_in'    => ['nullable', 'boolean'],
         ]);
 
@@ -1312,7 +1312,7 @@ class PublicBookingController extends Controller
             'notes'         => ['nullable', 'string', 'max:2000'],
             'room_id'       => ['nullable', 'integer', 'exists:rooms,id'],
             'location_id'   => ['nullable', 'integer'],
-            'source'        => ['nullable', 'in:website,instagram,facebook,whatsapp,widget,partner,qr'],
+            'source'        => ['nullable', 'in:website,mobile,instagram,facebook,whatsapp,widget,partner,qr'],
             'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
             'marketing_opt_in' => ['nullable', 'boolean'],
             'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
