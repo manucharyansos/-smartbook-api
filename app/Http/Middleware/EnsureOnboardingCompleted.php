@@ -57,6 +57,13 @@ class EnsureOnboardingCompleted
             return true;
         }
 
-        return $path === 'api/staff' && $method === 'POST';
+        if ($path === 'api/staff' && $method === 'POST') {
+            return true;
+        }
+
+        // The canonical weekly business schedule is an onboarding step.
+        // These routes live in the main route group for post-onboarding parity,
+        // so explicitly allow only the business-level GET/PUT while onboarding.
+        return $path === 'api/schedule' && in_array($method, ['GET', 'PUT'], true);
     }
 }
