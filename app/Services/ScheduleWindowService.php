@@ -49,6 +49,24 @@ class ScheduleWindowService
             && DB::table('business_working_hours')->where('business_id', $business->id)->exists();
     }
 
+    public function shouldEnforce(Business $business, ?User $staff, Carbon $date): bool
+    {
+        if ($this->hasStructuredSchedule($business)) return true;
+        if ($staff && Schema::hasTable('staff_working_hours') && DB::table('staff_working_hours')
+            ->where('business_id', $business->id)->where('user_id', $staff->id)->exists()) return true;
+        if (Schema::hasTable('schedule_exceptions')) {
+            $query = DB::table('schedule_exceptions')
+                ->where('business_id', $business->id)
+                ->whereDate('date', $date->copy()->timezone($business->effectiveTimezone())->toDateString());
+            $query->where(function ($q) use ($staff) {
+                $q->whereNull('user_id');
+                if ($staff) $q->orWhere('user_id', $staff->id);
+            });
+            if ($query->exists()) return true;
+        }
+        return false;
+    }
+
     public function legacyEnvelope(Business $business): ?array
     {
         if (!$this->hasStructuredSchedule($business)) return null;
