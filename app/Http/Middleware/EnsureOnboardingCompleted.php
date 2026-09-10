@@ -57,7 +57,9 @@ class EnsureOnboardingCompleted
             return true;
         }
 
-        if ($path === 'api/staff' && $method === 'POST') {
+        // During onboarding the owner can both create and review the team.
+        // The GET route lives in the main app group, so it must pass this gate too.
+        if ($path === 'api/staff' && in_array($method, ['GET', 'POST'], true)) {
             return true;
         }
 
