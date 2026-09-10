@@ -4,9 +4,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Booking;
+use App\Models\Business;
 use App\Models\Service;
 use App\Services\AvailabilityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\ValidationException;
 
 class AvailabilityController extends Controller
@@ -59,6 +62,63 @@ class AvailabilityController extends Controller
             partySize: max(1, (int) $request->integer('party_size', 1)),
         );
 
-        return response()->json($slots);
+        // The authenticated business booking endpoint treats every non-cancelled
+        // booking as a conflict. Apply the same rule here so the admin/mobile UI
+        // never advertises a slot that POST /bookings will immediately reject.
+        // Public/customer availability intentionally keeps its separate, more
+        // permissive verification-expiry rules in PublicBookingController.
+        if ($slots) {
+            $business = Business::query()->find($businessId);
+            $timezone = $business?->effectiveTimezone() ?? 'Asia/Yerevan';
+            $dayStart = Carbon::createFromFormat('Y-m-d', $date, $timezone)->startOfDay();
+            $dayEnd = $dayStart->copy()->addDay();
+            $dayStartUtc = $dayStart->copy()->setTimezone('UTC');
+            $dayEndUtc = $dayEnd->copy()->setTimezone('UTC');
+
+            $conflicts = Booking::query()
+                ->where('business_id', $businessId)
+                ->when($staffId, fn ($query) => $query->where('staff_id', $staffId))
+                ->where('status', '!=', 'cancelled')
+                ->whereNotNull('starts_at')
+                ->whereNotNull('ends_at')
+                ->where('starts_at', '<', $dayEndUtc->format('Y-m-d H:i:s'))
+                ->where('ends_at', '>', $dayStartUtc->format('Y-m-d H:i:s'))
+                ->get(['staff_id', 'starts_at', 'ends_at']);
+
+            $slots = array_values(array_filter($slots, function (array $slot) use ($conflicts, $timezone) {
+                try {
+                    $slotStart = Carbon::createFromFormat('Y-m-d H:i:s', (string) ($slot['starts_at'] ?? ''), $timezone)
+                        ->setTimezone('UTC');
+                    $slotEnd = Carbon::createFromFormat('Y-m-d H:i:s', (string) ($slot['ends_at'] ?? ''), $timezone)
+                        ->setTimezone('UTC');
+                } catch (\Throwable) {
+                    return false;
+                }
+
+                $slotStaffId = (int) ($slot['staff_id'] ?? 0);
+                foreach ($conflicts as $booking) {
+                    if ((int) $booking->staff_id !== $slotStaffId) {
+                        continue;
+                    }
+
+                    $bookingStart = $booking->starts_at instanceof Carbon
+                        ? $booking->starts_at->copy()->setTimezone('UTC')
+                        : Carbon::parse($booking->starts_at, 'UTC');
+                    $bookingEnd = $booking->ends_at instanceof Carbon
+                        ? $booking->ends_at->copy()->setTimezone('UTC')
+                        : Carbon::parse($booking->ends_at, 'UTC');
+
+                    if ($bookingStart->lt($slotEnd) && $bookingEnd->gt($slotStart)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }));
+        }
+
+        return response()->json($slots)
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache');
     }
 }
