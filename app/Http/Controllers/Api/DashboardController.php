@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\Business;
 use App\Models\BusinessLocation;
+use App\Models\Client;
 use App\Models\Service;
 use App\Models\User;
 use Carbon\Carbon;
@@ -67,6 +68,7 @@ class DashboardController extends Controller
             ->count();
 
         $counts = [
+            'clients' => Client::query()->where('business_id', $business->id)->count(),
             'staff' => $business->activeSeatCount(),
             'services' => $business->activeServiceCount(),
             'locations' => $business->locationCount(),
