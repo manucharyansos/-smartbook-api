@@ -5,19 +5,6 @@ $isNonProduction = in_array((string) env('APP_ENV', 'production'), ['local', 'te
 return [
     'trial_days' => (int) env('TRIAL_DAYS', 14),
 
-    'bank' => [
-        'company_name' => env('BILLING_BANK_COMPANY_NAME', env('BILLING_COMPANY_NAME', 'Vizit LLC')),
-        'bank_name' => env('BILLING_BANK_NAME', 'IDBank'),
-        'account_number' => env('BILLING_BANK_ACCOUNT_NUMBER', 'COMING_SOON'),
-        'recipient_name' => env('BILLING_BANK_RECIPIENT_NAME', 'Vizit Billing'),
-        'note_template' => env('BILLING_BANK_NOTE_TEMPLATE', 'Invoice #:id / Business #:business'),
-    ],
-
-    'idram' => [
-        'wallet_id' => env('BILLING_IDRAM_WALLET_ID', env('BILLING_IDRAM_WALLET', 'COMING_SOON')),
-        'note_template' => env('BILLING_IDRAM_NOTE_TEMPLATE', 'Invoice #:id'),
-    ],
-
     'frontend_base_url' => rtrim(env('FRONTEND_APP_URL', env('APP_FRONTEND_URL', env('APP_URL', 'http://localhost'))), '/'),
 
     'allow_mock_payments' => filter_var(
@@ -30,6 +17,9 @@ return [
         'mode' => env('BILLING_PROVIDER_MODE', $isNonProduction ? 'mock' : 'live'),
         'idbank' => [
             'live_enabled' => filter_var(env('IDBANK_LIVE_ENABLED', false), FILTER_VALIDATE_BOOL),
+            // Keep live checkout closed until the merchant contract's exact request,
+            // signature and callback field mapping has been implemented and reviewed.
+            'contract_mapping_ready' => filter_var(env('IDBANK_CONTRACT_MAPPING_READY', false), FILTER_VALIDATE_BOOL),
             'merchant_id' => env('IDBANK_MERCHANT_ID'),
             'terminal_id' => env('IDBANK_TERMINAL_ID'),
             'public_key' => env('IDBANK_PUBLIC_KEY'),

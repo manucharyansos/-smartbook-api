@@ -62,6 +62,10 @@ class HostedCheckoutUrlBuilder
             ];
         }
 
+        if (!config('billing.providers.idbank.contract_mapping_ready', false)) {
+            throw new \RuntimeException('IDBank live contract mapping is not implemented yet.');
+        }
+
         $checkoutBaseUrl = rtrim((string) config('billing.providers.idbank.checkout_base_url', 'https://payments.idbank.am'), '/');
 
         return [

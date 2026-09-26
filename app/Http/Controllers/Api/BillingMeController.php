@@ -120,9 +120,13 @@ class BillingMeController extends Controller
         ];
         $liveReady = $defaultProvider === 'idbank'
             && (bool) config('billing.providers.idbank.live_enabled', false)
+            && (bool) config('billing.providers.idbank.contract_mapping_ready', false)
             && collect($idbankCredentials)->every(
                 fn ($value) => filled($value) && $value !== 'CHANGE_ME'
             );
+        $mockReady = $defaultProvider === 'idbank_mock'
+            && app()->environment(['local', 'testing'])
+            && (bool) config('billing.allow_mock_payments', false);
 
         return response()->json([
             'data' => [
@@ -155,6 +159,7 @@ class BillingMeController extends Controller
                     'default' => $defaultProvider,
                     'mode' => $defaultProvider === 'idbank' ? 'live' : 'mock',
                     'live_ready' => $liveReady,
+                    'checkout_available' => $liveReady || $mockReady,
                 ],
                 'pricing' => $pricing,
                 'individual_offers' => $individualOffers,

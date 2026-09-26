@@ -26,6 +26,11 @@ class ClientAccount extends Authenticatable implements MustVerifyEmailContract
         'avatar_url',
         'email_verified_at',
         'last_login_at',
+        'terms_accepted_at',
+        'terms_version',
+        'privacy_version',
+        'legal_acceptance_ip',
+        'legal_acceptance_user_agent',
     ];
 
     protected $hidden = [
@@ -36,6 +41,7 @@ class ClientAccount extends Authenticatable implements MustVerifyEmailContract
     protected $casts = [
         'email_verified_at' => 'datetime',
         'last_login_at' => 'datetime',
+        'terms_accepted_at' => 'datetime',
         'password' => 'hashed',
     ];
 

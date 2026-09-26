@@ -135,6 +135,7 @@ it('connects a verified booking customer and exposes the connected state', funct
     $this->withHeader('X-Guest-Token', $guestToken)
         ->getJson('/api/public/bookings/' . $booking->booking_code)
         ->assertOk()
+        ->assertJsonPath('data.telegram_available', true)
         ->assertJsonPath('data.telegram_connected', true);
 });
 

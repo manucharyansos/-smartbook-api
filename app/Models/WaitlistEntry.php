@@ -13,6 +13,8 @@ class WaitlistEntry extends Model
         'window_start', 'window_end', 'party_size', 'status', 'offered_staff_id',
         'offered_starts_at', 'offered_ends_at', 'offer_token_hash', 'offer_expires_at',
         'notified_at', 'booked_booking_id', 'source', 'notes',
+        'legal_accepted_at', 'terms_version', 'privacy_version',
+        'legal_acceptance_ip', 'legal_acceptance_user_agent',
     ];
 
     protected $casts = [
@@ -22,6 +24,7 @@ class WaitlistEntry extends Model
         'offered_ends_at' => 'datetime',
         'offer_expires_at' => 'datetime',
         'notified_at' => 'datetime',
+        'legal_accepted_at' => 'datetime',
     ];
 
     public function business(): BelongsTo { return $this->belongsTo(Business::class); }

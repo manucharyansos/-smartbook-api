@@ -250,9 +250,6 @@ class SeoController extends Controller
             '/privacy-policy' => ['title' => 'Գաղտնիության քաղաքականություն | Vizit', 'description' => 'Կարդացեք Vizit-ի գաղտնիության քաղաքականությունը։'],
             '/terms' => ['title' => 'Օգտագործման պայմաններ | Vizit', 'description' => 'Կարդացեք Vizit հարթակի օգտագործման պայմանները։'],
             '/cookies' => ['title' => 'Cookie-ների քաղաքականություն | Vizit', 'description' => 'Իմացեք, թե ինչպես է Vizit-ը օգտագործում cookie-ները։'],
-            '/blog' => ['title' => 'Vizit Blog', 'description' => 'Vizit-ի հոդվածներն ու նորությունները։', 'robots' => 'noindex,follow'],
-            '/careers' => ['title' => 'Աշխատանք Vizit-ում', 'description' => 'Vizit-ի թափուր հաստիքներն ու համագործակցության հնարավորությունները։', 'robots' => 'noindex,follow'],
-            '/press' => ['title' => 'Vizit մամուլի կենտրոն', 'description' => 'Vizit-ի մամուլի և բրենդային նյութերը։', 'robots' => 'noindex,follow'],
         ];
 
         foreach (['/login', '/register', '/forgot-password', '/reset-password', '/business/login', '/business/register', '/client/', '/admin', '/app', '/payment-return', '/auth/', '/mock-bank'] as $prefix) {

@@ -46,6 +46,11 @@ class Booking extends Model
         'phone_verification_attempts',
         'guest_access_token_hash',
         'guest_access_expires_at',
+        'legal_accepted_at',
+        'terms_version',
+        'privacy_version',
+        'legal_acceptance_ip',
+        'legal_acceptance_user_agent',
     ];
 
     protected $casts = [
@@ -61,6 +66,7 @@ class Booking extends Model
         'phone_verification_expires_at' => 'datetime',
         'phone_verified_at' => 'datetime',
         'guest_access_expires_at' => 'datetime',
+        'legal_accepted_at' => 'datetime',
     ];
 
     protected static function booted(): void

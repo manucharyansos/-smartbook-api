@@ -38,6 +38,9 @@ it('lets a healthcare owner create and manage services and staff through onboard
         'email' => 'medical-owner@example.com',
         'password' => 'SecurePassword123!',
         'password_confirmation' => 'SecurePassword123!',
+        'legal_accepted' => true,
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
     ]);
 
     $registration

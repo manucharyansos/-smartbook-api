@@ -73,12 +73,12 @@ class ClientActivityController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'note' => ['nullable', 'string'],
             'remind_at' => ['required', 'date'],
-            'channel' => ['nullable', 'string', 'max:30'],
+            'channel' => ['nullable', 'string', 'in:internal,email'],
             'status' => ['nullable', 'string', 'in:pending,queued,done,canceled'],
             'is_enabled' => ['sometimes', 'boolean'],
             'lead_minutes' => ['nullable', 'integer', 'min:0', 'max:10080'],
             'notify_via' => ['nullable', 'array'],
-            'notify_via.*' => ['string', 'in:internal,sms,whatsapp,email'],
+            'notify_via.*' => ['string', 'in:internal,email'],
         ]);
 
         $status = (string) ($data['status'] ?? 'pending');
@@ -108,12 +108,12 @@ class ClientActivityController extends Controller
             'title' => ['sometimes', 'string', 'max:255'],
             'note' => ['nullable', 'string'],
             'remind_at' => ['sometimes', 'date'],
-            'channel' => ['nullable', 'string', 'max:30'],
+            'channel' => ['nullable', 'string', 'in:internal,email'],
             'status' => ['sometimes', 'string', 'in:pending,queued,done,canceled'],
             'is_enabled' => ['sometimes', 'boolean'],
             'lead_minutes' => ['nullable', 'integer', 'min:0', 'max:10080'],
             'notify_via' => ['nullable', 'array'],
-            'notify_via.*' => ['string', 'in:internal,sms,whatsapp,email'],
+            'notify_via.*' => ['string', 'in:internal,email'],
         ]);
 
         if (array_key_exists('title', $data)) $reminder->title = trim((string) $data['title']);

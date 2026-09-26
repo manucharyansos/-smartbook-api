@@ -1227,17 +1227,6 @@ class BookingController extends Controller
             }
 
             $this->sendAdminCreatedBookingEmailToClient($booking);
-
-            try {
-                if (!empty($booking->client_phone)) {
-                    $twilio = app(\App\Services\TwilioService::class);
-                    $message = "Նոր ամրագրում {$booking->starts_at}";
-                    $twilio->sendSMS($booking->client_phone, $message);
-                    $twilio->sendWhatsApp($booking->client_phone, $message);
-                }
-            } catch (\Throwable $e) {
-                Log::warning("Twilio send failed", ["booking_id" => $booking->id, "err" => $e->getMessage()]);
-            }
         } catch (\Throwable $e) {
             Log::warning("Booking notify failed", ["booking_id" => $booking->id, "err" => $e->getMessage()]);
         }

@@ -29,7 +29,7 @@ class BillingPaymentController extends Controller
         $data = $request->validate([
             'invoice_id' => ['nullable', 'integer', 'exists:invoices,id'],
             'provider' => ['nullable', 'string', 'in:idbank,idbank_mock'],
-            'payment_method' => ['nullable', 'string', 'in:bank_transfer,idram,card'],
+            'payment_method' => ['nullable', 'string', 'in:card'],
         ]);
 
         $provider = (string) config('billing.providers.default', 'idbank_mock');
@@ -49,7 +49,7 @@ class BillingPaymentController extends Controller
             ], 422);
         }
 
-        if ($provider === 'idbank_mock' && !config('billing.allow_mock_payments', false)) {
+        if ($provider === 'idbank_mock' && (!$this->mockPaymentsAreAllowed())) {
             return response()->json([
                 'message' => 'Փորձնական վճարումները հասանելի չեն այս միջավայրում։',
                 'code' => 'mock_payments_disabled',
@@ -135,14 +135,17 @@ class BillingPaymentController extends Controller
                 'name' => $provider,
                 'mode' => $provider === 'idbank' ? 'live' : 'mock',
                 'live_ready' => $provider === 'idbank',
-                'message' => 'Hosted redirect flow is ready. User should be sent to the bank page, and the final status should come back via return URL and webhook/callback.',
+                'message' => $provider === 'idbank'
+                    ? 'IDBank hosted checkout is ready; final status is accepted only through the verified return and webhook flow.'
+                    : 'Local test checkout is ready; it is never available in production.',
             ],
         ], $status);
     }
 
     private function idbankIsReady(): bool
     {
-        if (!config('billing.providers.idbank.live_enabled', false)) {
+        if (!config('billing.providers.idbank.live_enabled', false)
+            || !config('billing.providers.idbank.contract_mapping_ready', false)) {
             return false;
         }
 
@@ -154,6 +157,12 @@ class BillingPaymentController extends Controller
         }
 
         return true;
+    }
+
+    private function mockPaymentsAreAllowed(): bool
+    {
+        return app()->environment(['local', 'testing'])
+            && (bool) config('billing.allow_mock_payments', false);
     }
 
     public function status(Request $request, Invoice $invoice)

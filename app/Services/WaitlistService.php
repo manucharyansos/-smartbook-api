@@ -241,6 +241,11 @@ class WaitlistService
                 'phone_verified_at' => now(),
                 'guest_access_token_hash' => Hash::make($guestToken),
                 'guest_access_expires_at' => now()->addDays(7),
+                'legal_accepted_at' => $locked->legal_accepted_at,
+                'terms_version' => $locked->terms_version,
+                'privacy_version' => $locked->privacy_version,
+                'legal_acceptance_ip' => $locked->legal_acceptance_ip,
+                'legal_acceptance_user_agent' => $locked->legal_acceptance_user_agent,
             ]);
 
             $locked->update([

@@ -135,6 +135,11 @@ class PlanController extends Controller
             unset($features['services_limit']);
         }
 
+        // These delivery products are not currently offered. Keep plan edits
+        // from accidentally exposing them before a production provider exists.
+        $features['sms_reminders'] = false;
+        $features['whatsapp_notifications'] = false;
+
         // services_limit lives in the versioned feature snapshot, not in a
         // standalone plans table column.
         unset($validated['services_limit']);

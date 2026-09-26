@@ -56,6 +56,11 @@ it('keeps a waiting-list offer reserved and lets its owner accept that exact hol
         'offered_ends_at' => Carbon::parse('2026-09-01 11:00:00', 'UTC'),
         'offer_token_hash' => hash('sha256', $token),
         'offer_expires_at' => now()->addMinutes(30),
+        'legal_accepted_at' => now()->subMinute(),
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
+        'legal_acceptance_ip' => '127.0.0.1',
+        'legal_acceptance_user_agent' => 'GrowthSuiteTest',
     ]);
 
     $waitlist = app(WaitlistService::class);
@@ -79,6 +84,10 @@ it('keeps a waiting-list offer reserved and lets its owner accept that exact hol
     $accepted = $waitlist->acceptOffer($entry, $token);
     expect($accepted['booking']->status)->toBe('confirmed');
     expect($accepted['booking']->source)->toBe('waitlist');
+    expect($accepted['booking']->terms_version)->toBe(config('legal.terms_version'))
+        ->and($accepted['booking']->privacy_version)->toBe(config('legal.privacy_version'))
+        ->and($accepted['booking']->legal_acceptance_ip)->toBe('127.0.0.1')
+        ->and($accepted['booking']->legal_acceptance_user_agent)->toBe('GrowthSuiteTest');
     $this->assertDatabaseHas('waitlist_entries', ['id' => $entry->id, 'status' => 'booked']);
 });
 

@@ -70,3 +70,19 @@ it('does not expose another business client detail bookings or mutations', funct
     $this->assertDatabaseMissing('client_notes', ['client_id' => $id]);
     $this->assertDatabaseMissing('client_reminders', ['client_id' => $id]);
 });
+
+it('rejects reminder delivery channels that are not currently offered', function () {
+    $this->postJson("/api/clients/{$this->clientA->id}/reminders", [
+        'title' => 'Unavailable channel',
+        'remind_at' => now()->addDay()->toISOString(),
+        'channel' => 'sms',
+        'notify_via' => ['internal', 'whatsapp'],
+    ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['channel', 'notify_via.1']);
+
+    $this->assertDatabaseMissing('client_reminders', [
+        'client_id' => $this->clientA->id,
+        'title' => 'Unavailable channel',
+    ]);
+});

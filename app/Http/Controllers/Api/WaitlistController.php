@@ -12,6 +12,7 @@ use App\Services\WaitlistService;
 use App\Support\Phone;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Validation\Rule;
 
 class WaitlistController extends Controller
 {
@@ -30,6 +31,9 @@ class WaitlistController extends Controller
             'party_size' => ['nullable', 'integer', 'min:1', 'max:500'],
             'notes' => ['nullable', 'string', 'max:1000'],
             'source' => ['nullable', 'in:website,widget,instagram,facebook,whatsapp,qr'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
 
         $business = $this->publicBusiness($slug);
@@ -104,6 +108,11 @@ class WaitlistController extends Controller
             'status' => 'waiting',
             'source' => $data['source'] ?? 'website',
             'notes' => $data['notes'] ?? null,
+            'legal_accepted_at' => now(),
+            'terms_version' => (string) $data['terms_version'],
+            'privacy_version' => (string) $data['privacy_version'],
+            'legal_acceptance_ip' => $request->ip() ? mb_substr((string) $request->ip(), 0, 45) : null,
+            'legal_acceptance_user_agent' => $request->userAgent() ? mb_substr((string) $request->userAgent(), 0, 500) : null,
         ]);
 
         return response()->json(['data' => $this->payload($entry->load(['business', 'service', 'staff']))], 201);

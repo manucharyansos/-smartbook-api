@@ -43,7 +43,7 @@ class BillingInvoiceController extends Controller
 
         $data = $request->validate([
             'plan_code' => ['required','string','exists:plans,code'],
-            'payment_method' => ['nullable','string','in:bank_transfer,idram,card,cash'],
+            'payment_method' => ['nullable','string','in:card'],
             'billing_cycle' => ['nullable','string','in:monthly,yearly'],
             'note' => ['nullable','string','max:255'],
         ]);
@@ -171,11 +171,7 @@ class BillingInvoiceController extends Controller
                 'ok' => true,
                 'mode' => 'invoice',
                 'data' => $existing->load('plan:id,name,code,price,monthly_price,yearly_price,currency,seats,staff_limit'),
-                'provider' => [
-                    'default' => config('billing.providers.default', 'idbank_mock'),
-                    'mode' => config('billing.providers.mode', 'mock'),
-                    'checkout_required' => true,
-                ],
+                'provider' => $this->paymentProviderStatus(),
             ]);
         }
 
@@ -220,30 +216,18 @@ class BillingInvoiceController extends Controller
             'meta' => $invoiceMeta,
         ]);
 
-        $bank = config('billing.bank');
-        $idram = config('billing.idram');
+        $provider = $this->paymentProviderStatus();
 
         return response()->json([
             'ok' => true,
             'mode' => 'invoice',
             'data' => $invoice->load('plan:id,name,code,price,monthly_price,yearly_price,currency,seats,staff_limit'),
             'payment' => [
-                'bank_transfer' => [
-                    'company' => $bank['company_name'],
-                    'bank_name' => $bank['bank_name'],
-                    'account_number' => $bank['account_number'],
-                    'recipient' => $bank['recipient_name'],
-                    'payment_note' => str_replace(
-                        [':id', ':business'],
-                        [$invoice->id, $invoice->business_id],
-                        $bank['note_template']
-                    ),
-                ],
-                'idram' => [
-                    'wallet' => $idram['wallet_id'],
-                    'payment_note' => str_replace(':id', $invoice->id, $idram['note_template']),
-                ],
-                'message' => 'Այժմ կարող եք ստեղծել payment session և հետո webhook/mock success-ով invoice-ը կակտիվանա ավտոմատ։',
+                'method' => 'idbank_hosted_checkout',
+                'checkout_available' => $provider['checkout_available'],
+                'message' => $provider['checkout_available']
+                    ? 'Վճարումը կատարվում է IDBank-ի պաշտպանված էջում։'
+                    : 'IDBank-ի պաշտոնական merchant կապը դեռ ակտիվ չէ․ այս հաշիվը հիմա օնլայն վճարման ենթակա չէ։',
                 'billing_cycle' => $billingCycle,
                 'amount_summary' => [
                     'base_monthly_amount' => $monthlyPrice,
@@ -254,12 +238,43 @@ class BillingInvoiceController extends Controller
                 ],
             ],
             'provider' => [
-                'default' => config('billing.providers.default', 'idbank_mock'),
-                'mode' => config('billing.providers.mode', 'mock'),
-                'checkout_required' => true,
-                'next_step' => 'POST /api/billing/checkout-session',
+                ...$provider,
+                'next_step' => $provider['checkout_available'] ? 'POST /api/billing/checkout-session' : null,
             ],
         ], 201);
+    }
+
+    private function paymentProviderStatus(): array
+    {
+        $defaultProvider = (string) config('billing.providers.default', 'idbank');
+        $mode = (string) config('billing.providers.mode', 'live');
+        $idBank = (array) config('billing.providers.idbank', []);
+        $isNonProduction = app()->environment(['local', 'testing']);
+        $mockReady = $defaultProvider === 'idbank_mock'
+            && $mode === 'mock'
+            && $isNonProduction
+            && (bool) config('billing.allow_mock_payments', false);
+        $requiredLiveValues = [
+            $idBank['merchant_id'] ?? null,
+            $idBank['terminal_id'] ?? null,
+            $idBank['secret'] ?? null,
+            $idBank['webhook_secret'] ?? null,
+        ];
+        $liveReady = $defaultProvider === 'idbank'
+            && $mode === 'live'
+            && (bool) ($idBank['live_enabled'] ?? false)
+            && (bool) ($idBank['contract_mapping_ready'] ?? false)
+            && collect($requiredLiveValues)->every(
+                fn ($value) => filled($value) && $value !== 'CHANGE_ME'
+            );
+
+        return [
+            'default' => $mockReady ? 'idbank_mock' : 'idbank',
+            'mode' => $mockReady ? 'mock' : 'live',
+            'checkout_required' => true,
+            'checkout_available' => $mockReady || $liveReady,
+            'connection_status' => $mockReady || $liveReady ? 'connected' : 'awaiting_official_connection',
+        ];
     }
 
     public function cancel(Request $request, Invoice $invoice)

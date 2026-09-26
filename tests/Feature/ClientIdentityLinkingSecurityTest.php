@@ -37,6 +37,9 @@ it('sends verification and does not link profiles during password registration',
         'phone' => '+37498123456',
         'password' => 'A-client-password-123',
         'password_confirmation' => 'A-client-password-123',
+        'legal_accepted' => true,
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
     ])->assertOk()
         ->assertJsonPath('user.email_verified', false)
         ->assertJsonPath('user.requires_email_verification', true);
@@ -44,7 +47,28 @@ it('sends verification and does not link profiles during password registration',
     $account = ClientAccount::query()->where('email', 'client@example.com')->sole();
     Notification::assertSentTo($account, ClientVerifyEmail::class);
 
+    expect($account->terms_accepted_at)->not->toBeNull()
+        ->and($account->terms_version)->toBe(config('legal.terms_version'))
+        ->and($account->privacy_version)->toBe(config('legal.privacy_version'));
+
     expect($profile->fresh()->client_account_id)->toBeNull();
+});
+
+it('rejects client registration without legal acceptance', function () {
+    Notification::fake();
+
+    $this->postJson('/api/client/auth/register', [
+        'name' => 'Client',
+        'email' => 'no-consent@example.com',
+        'password' => 'A-client-password-123',
+        'password_confirmation' => 'A-client-password-123',
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
+    ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('legal_accepted');
+
+    $this->assertDatabaseMissing('client_accounts', ['email' => 'no-consent@example.com']);
 });
 
 it('sends email verification through the authenticated frontend confirmation page', function () {

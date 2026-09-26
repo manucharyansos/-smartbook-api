@@ -5,17 +5,12 @@ namespace App\Services;
 use App\Models\ClientReminder;
 use App\Models\ClientReminderDelivery;
 use App\Notifications\ClientReminderMailNotification;
-use App\Support\PhoneNormalizer;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Notification;
 use Throwable;
 
 class ClientReminderDispatchService
 {
-    public function __construct(
-        protected SmsService $smsService,
-    ) {}
-
     public function isDue(ClientReminder $reminder, ?Carbon $now = null): bool
     {
         $now = $now ?: now();
@@ -41,6 +36,7 @@ class ClientReminderDispatchService
 
         $channels = collect($reminder->notify_via ?: [$reminder->channel ?: 'internal'])
             ->filter()
+            ->filter(fn ($channel) => in_array((string) $channel, ['internal', 'email'], true))
             ->unique()
             ->values();
 
@@ -130,23 +126,7 @@ class ClientReminderDispatchService
             return;
         }
 
-        $phone = PhoneNormalizer::normalize($reminder->client?->phone);
-        if (!$phone) {
-            $delivery->status = 'skipped';
-            $delivery->error_message = 'Client phone is missing';
-            $delivery->save();
-            return;
-        }
-
-        $message = $this->messageFor($reminder, $channel);
-        $result = $this->smsService->send($phone, $message, $channel);
-
-        $delivery->status = $result['status'] ?? 'delivered';
-        $delivery->provider = $result['provider'] ?? $this->providerFor($channel);
-        $delivery->recipient = $result['recipient'] ?? $phone;
-        $delivery->sent_at = now();
-        $delivery->payload = $result['payload'] ?? ['mode' => 'provider'];
-        $delivery->save();
+        throw new \RuntimeException("Unsupported reminder delivery channel [{$channel}].");
     }
 
     protected function scheduledFor(ClientReminder $reminder): ?Carbon
@@ -162,7 +142,6 @@ class ClientReminderDispatchService
     {
         return match ($channel) {
             'email' => $reminder->client?->email,
-            'sms', 'whatsapp' => PhoneNormalizer::normalize($reminder->client?->phone),
             default => null,
         };
     }
@@ -171,30 +150,7 @@ class ClientReminderDispatchService
     {
         return match ($channel) {
             'email' => 'laravel_mail',
-            'sms', 'whatsapp' => (string) config('services.sms.driver', 'log'),
             default => null,
         };
-    }
-
-    protected function messageFor(ClientReminder $reminder, string $channel): string
-    {
-        $businessName = $reminder->client?->business?->name ?: config('app.name', 'Vizit');
-        $when = $reminder->remind_at instanceof Carbon
-            ? $reminder->remind_at->format('d.m.Y H:i')
-            : Carbon::parse((string) $reminder->remind_at)->format('d.m.Y H:i');
-
-        $parts = [
-            $businessName,
-            $reminder->title ?: 'Appointment reminder',
-            'Time: ' . $when,
-        ];
-
-        if ($reminder->note) {
-            $parts[] = trim((string) $reminder->note);
-        }
-
-        return $channel === 'whatsapp'
-            ? implode("\n", $parts)
-            : implode(' | ', $parts);
     }
 }

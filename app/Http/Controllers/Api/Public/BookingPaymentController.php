@@ -22,7 +22,7 @@ class BookingPaymentController extends Controller
             ? null
             : (int) $related->sum(fn ($item) => (int) $item->final_price);
         return response()->json(['data' => [
-            'deposit_available' => (bool) config('booking_payments.enabled') && $total !== null && $total > 0
+            'deposit_available' => $this->paymentProviderIsReady() && $total !== null && $total > 0
                 && !in_array($booking->status, ['cancelled', 'done', 'completed', 'no_show'], true),
             'deposit_percent' => (int) config('booking_payments.deposit_percent', 20),
         ]]);
@@ -47,7 +47,7 @@ class BookingPaymentController extends Controller
             abort_unless(config('billing.providers.idbank.live_enabled'), 503, 'IDBank live payment is not connected yet.');
             abort(503, 'IDBank contract mapping is pending official merchant documentation.');
         }
-        abort_unless(config('billing.allow_mock_payments'), 404);
+        abort_unless($this->mockPaymentsAreAllowed(), 404);
 
         $existing = BookingPayment::query()->where('booking_id', $booking->id)->where('provider', $provider)
             ->where('status', 'pending')->where('expires_at', '>', now())->latest('id')->first();
@@ -85,7 +85,7 @@ class BookingPaymentController extends Controller
 
     public function mockPage(string $reference)
     {
-        abort_unless(config('billing.allow_mock_payments'), 404);
+        abort_unless($this->mockPaymentsAreAllowed(), 404);
         $payment = BookingPayment::query()->where('provider', 'idbank_mock')->where('reference', $reference)->firstOrFail();
         abort_unless($payment->status === 'pending' && (!$payment->expires_at || $payment->expires_at->isFuture()), 410);
         $action = url('/api/public/booking-payments/mock/' . rawurlencode($reference) . '/complete');
@@ -95,7 +95,7 @@ class BookingPaymentController extends Controller
 
     public function mockComplete(string $reference, Request $request)
     {
-        abort_unless(config('billing.allow_mock_payments'), 404);
+        abort_unless($this->mockPaymentsAreAllowed(), 404);
         $data = $request->validate(['status' => ['required', 'in:success,failed,cancelled']]);
         $payment = DB::transaction(function () use ($reference, $data) {
             $payment = BookingPayment::query()->where('provider', 'idbank_mock')->where('reference', $reference)->lockForUpdate()->firstOrFail();
@@ -127,6 +127,22 @@ class BookingPaymentController extends Controller
     {
         $parts = parse_url($value);
         return ($parts['scheme'] ?? '') === 'vizit' || (($parts['scheme'] ?? '') === 'https' && strtolower((string) ($parts['host'] ?? '')) === 'vizit.am');
+    }
+
+    private function paymentProviderIsReady(): bool
+    {
+        if (!config('booking_payments.enabled')) {
+            return false;
+        }
+
+        return (string) config('booking_payments.provider') === 'idbank_mock'
+            && $this->mockPaymentsAreAllowed();
+    }
+
+    private function mockPaymentsAreAllowed(): bool
+    {
+        return app()->environment(['local', 'testing'])
+            && (bool) config('billing.allow_mock_payments', false);
     }
 
     private function sessionResponse(BookingPayment $payment, int $status)

@@ -13,7 +13,6 @@ use App\Models\Room;
 use App\Models\Service;
 use App\Models\User;
 use App\Services\AvailabilityService;
-use App\Services\SmsService;
 use App\Services\TelegramLinkService;
 use App\Services\TelegramService;
 use App\Services\ClientIdentityLinker;
@@ -27,6 +26,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 // Added imports for multi booking support
 use App\Models\BookingItem;
@@ -750,7 +750,12 @@ class PublicBookingController extends Controller
             'redeem_points' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             'gift_card_code' => ['nullable', 'string', 'max:40'],
             'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
+
+        $legalAcceptance = $this->legalAcceptancePayload($request, $data);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
@@ -916,7 +921,8 @@ class PublicBookingController extends Controller
             $requestedIds,
             $services,
             $code,
-            $expires
+            $expires,
+            $legalAcceptance
         ) {
             $resolvedLocationId = $this->resolveBookingLocationId($business, !empty($data['location_id']) ? (int) $data['location_id'] : null, $services->get($requestedIds[0]), $staff);
 
@@ -942,6 +948,7 @@ class PublicBookingController extends Controller
                 'phone_verified_at' => null,
                 'phone_verification_attempts' => 0,
                 'room_id'      => ($business->isHealthcareVertical()) ? ($data['room_id'] ?? null) : null,
+                ...$legalAcceptance,
             ];
 
             $booking = Booking::query()->create($this->withoutUnavailableLocationAttribute($bookingPayload, 'bookings'));
@@ -998,7 +1005,12 @@ class PublicBookingController extends Controller
             'location_id'         => ['nullable', 'integer'],
             'source'              => ['nullable', 'in:website,mobile,instagram,facebook,whatsapp,widget,partner,qr'],
             'marketing_opt_in'    => ['nullable', 'boolean'],
+            'legal_accepted'      => ['required', 'accepted'],
+            'terms_version'       => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version'     => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
+
+        $legalAcceptance = $this->legalAcceptancePayload($request, $data);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
@@ -1156,7 +1168,8 @@ class PublicBookingController extends Controller
             $data,
             $code,
             $expires,
-            $groupId
+            $groupId,
+            $legalAcceptance
         ) {
             foreach ($linesData as $idx => $row) {
                 /** @var Service $svc */
@@ -1190,6 +1203,7 @@ class PublicBookingController extends Controller
                     'phone_verified_at' => null,
                     'phone_verification_attempts' => 0,
                     'room_id'      => ($business->isHealthcareVertical()) ? ($data['room_id'] ?? null) : null,
+                    ...$legalAcceptance,
                 ];
 
                 $booking = Booking::query()->create($this->withoutUnavailableLocationAttribute($bookingPayload, 'bookings'));
@@ -1300,7 +1314,7 @@ class PublicBookingController extends Controller
      * POST /api/public/businesses/{slug}/bookings
      * Creates booking in "pending" but hides from staff until phone verified.
      */
-    public function store(string $slug, Request $request, AvailabilityService $availability, SmsService $sms)
+    public function store(string $slug, Request $request, AvailabilityService $availability)
     {
         $data = $request->validate([
             'service_id'    => ['required', 'integer', 'exists:services,id'],
@@ -1320,7 +1334,12 @@ class PublicBookingController extends Controller
             'gift_card_amount' => ['nullable', 'integer', 'min:1', 'max:100000000'],
             'recurrence_frequency' => ['nullable', 'in:weekly,biweekly,monthly'],
             'recurrence_count' => ['nullable', 'integer', 'min:1', 'max:12'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
+
+        $legalAcceptance = $this->legalAcceptancePayload($request, $data);
 
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
 
@@ -1498,6 +1517,7 @@ class PublicBookingController extends Controller
             'phone_verification_expires_at' => $expires,
             'phone_verified_at' => null,
             'phone_verification_attempts' => 0,
+            ...$legalAcceptance,
         ];
 
         $recurrenceId = $recurrenceCount > 1 ? (string) Str::uuid() : null;
@@ -2215,6 +2235,7 @@ class PublicBookingController extends Controller
             'client_name' => $booking->client_name,
             'client_phone' => $booking->client_phone,
             'client_email' => $booking->contactEmail(),
+            'telegram_available' => app(TelegramService::class)->enabled(),
             'telegram_connected' => trim((string) $booking->client?->telegram_chat_id) !== '',
             'notes' => $booking->notes,
             'phone_verified_at' => $booking->phone_verified_at?->toISOString(),
@@ -2587,28 +2608,9 @@ class PublicBookingController extends Controller
     private function sendVerificationNotifications(Booking $booking, string $code, $expires, ?string $email = null): array
     {
         $booking->loadMissing(['business', 'service', 'staff', 'client', 'items.service']);
-        $phone = (string) $booking->client_phone;
         $bookingPageUrl = $this->frontendBookingPageUrl($booking);
         $verifyMessage = $this->buildVerificationMessage($booking, $code, $expires, $bookingPageUrl);
         $delivery = ['email' => false, 'telegram' => false];
-
-        try {
-            app(SmsService::class)->send($phone, $verifyMessage);
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking SMS verification delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
-
-        try {
-            app(SmsService::class)->send($phone, $verifyMessage, 'whatsapp');
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking WhatsApp verification delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
 
         $targetEmail = $email ?: $booking->contactEmail();
         if ($targetEmail) {
@@ -2746,25 +2748,6 @@ class PublicBookingController extends Controller
     {
         $booking->loadMissing(['business', 'service', 'staff', 'client', 'items.service']);
         $manageUrl = $this->frontendManageUrl($booking, $plainToken);
-        $message = $this->buildConfirmedMessage($booking, $manageUrl);
-
-        try {
-            app(SmsService::class)->send((string) $booking->client_phone, $message);
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking confirmation SMS delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
-
-        try {
-            app(SmsService::class)->send((string) $booking->client_phone, $message, 'whatsapp');
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking confirmation WhatsApp delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
 
         $targetEmail = $booking->contactEmail();
         if ($targetEmail) {
@@ -2788,25 +2771,6 @@ class PublicBookingController extends Controller
     private function sendBookingCancelledNotifications(Booking $booking): void
     {
         $booking->loadMissing(['business', 'service', 'staff', 'client', 'items.service']);
-        $message = $this->buildCancelledMessage($booking);
-
-        try {
-            app(SmsService::class)->send((string) $booking->client_phone, $message);
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking cancellation SMS delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
-
-        try {
-            app(SmsService::class)->send((string) $booking->client_phone, $message, 'whatsapp');
-        } catch (\Throwable $ex) {
-            \Log::warning('Public booking cancellation WhatsApp delivery failed', [
-                'booking_id' => $booking->id,
-                'error' => $ex->getMessage(),
-            ]);
-        }
 
         $targetEmail = $booking->contactEmail();
         if ($targetEmail) {
@@ -2848,6 +2812,20 @@ class PublicBookingController extends Controller
     {
         $tz = $booking->business?->effectiveTimezone() ?? 'Asia/Yerevan';
         return $booking->starts_at?->copy()?->timezone($tz)?->format('d.m.Y H:i') ?? '—';
+    }
+
+    private function legalAcceptancePayload(Request $request, array $data): array
+    {
+        $ip = $request->ip();
+        $userAgent = $request->userAgent();
+
+        return [
+            'legal_accepted_at' => now(),
+            'terms_version' => (string) $data['terms_version'],
+            'privacy_version' => (string) $data['privacy_version'],
+            'legal_acceptance_ip' => $ip ? mb_substr($ip, 0, 45) : null,
+            'legal_acceptance_user_agent' => $userAgent ? mb_substr($userAgent, 0, 500) : null,
+        ];
     }
 
     private function publicStatusLabel(string $status): string

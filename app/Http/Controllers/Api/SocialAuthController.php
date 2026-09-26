@@ -61,6 +61,9 @@ class SocialAuthController extends Controller
             'audience' => ['nullable', 'in:business,client'],
             'business_type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare'],
             'plan_code' => ['nullable', 'string', 'max:80'],
+            'legal_accepted' => ['nullable'],
+            'terms_version' => ['nullable', 'string', 'max:20'],
+            'privacy_version' => ['nullable', 'string', 'max:20'],
         ]);
 
         $callbackUrl = $data['callback_url'];
@@ -76,6 +79,22 @@ class SocialAuthController extends Controller
             $data['business_type'] ?? BusinessVertical::SERVICES
         );
         $planCode = null;
+
+        if ($mode === 'register') {
+            $accepted = filter_var($data['legal_accepted'] ?? false, FILTER_VALIDATE_BOOL);
+            $termsVersion = (string) ($data['terms_version'] ?? '');
+            $privacyVersion = (string) ($data['privacy_version'] ?? '');
+
+            if (
+                !$accepted
+                || !hash_equals((string) config('legal.terms_version'), $termsVersion)
+                || !hash_equals((string) config('legal.privacy_version'), $privacyVersion)
+            ) {
+                throw ValidationException::withMessages([
+                    'legal_accepted' => 'Գրանցվելու համար ընդունեք գործող Օգտագործման պայմաններն ու Գաղտնիության քաղաքականությունը։',
+                ]);
+            }
+        }
 
         if ($audience === 'business' && $mode === 'register') {
             $planCode = trim((string) ($data['plan_code'] ?? 'start')) ?: 'start';
@@ -98,6 +117,10 @@ class SocialAuthController extends Controller
             'plan_code' => $planCode,
             'fingerprint' => $fingerprint !== '' ? mb_substr($fingerprint, 0, 255) : '',
             'ip' => mb_substr((string) $request->ip(), 0, 255),
+            'user_agent' => mb_substr((string) $request->userAgent(), 0, 500),
+            'terms_accepted_at' => $mode === 'register' ? now()->toIso8601String() : null,
+            'terms_version' => $mode === 'register' ? (string) config('legal.terms_version') : null,
+            'privacy_version' => $mode === 'register' ? (string) config('legal.privacy_version') : null,
             'created_at' => now()->toIso8601String(),
         ];
 
@@ -202,7 +225,7 @@ class SocialAuthController extends Controller
                     $context
                 );
             } else {
-                $account = $this->resolveClientUser($provider, $providerUser, $linker);
+                $account = $this->resolveClientUser($provider, $providerUser, $linker, $context);
                 $pendingRegistration = null;
                 $needsBusinessProfile = false;
             }
@@ -339,7 +362,7 @@ class SocialAuthController extends Controller
         ])->header('Cache-Control', 'no-store');
     }
 
-    private function resolveClientUser(string $provider, array $providerUser, ClientIdentityLinker $linker): ClientAccount
+    private function resolveClientUser(string $provider, array $providerUser, ClientIdentityLinker $linker, array $context): ClientAccount
     {
         $providerId = trim((string) $providerUser['id']);
         $email = $linker->normalizeEmail($providerUser['email'] ?? null);
@@ -355,6 +378,12 @@ class SocialAuthController extends Controller
             $account = ClientAccount::query()->whereRaw('LOWER(email) = ?', [$email])->first();
         }
 
+        if (!$account && ($context['mode'] ?? 'login') === 'login') {
+            throw ValidationException::withMessages([
+                'social' => 'Այս email-ով հաճախորդի հաշիվ չգտնվեց։ Օգտագործեք հաճախորդի գրանցման էջը։',
+            ]);
+        }
+
         if (!$account) {
             $account = ClientAccount::query()->create([
                 'name' => $name,
@@ -365,10 +394,15 @@ class SocialAuthController extends Controller
                 'avatar_url' => $avatar,
                 'email_verified_at' => now(),
                 'last_login_at' => now(),
+                'terms_accepted_at' => $context['terms_accepted_at'] ?? now(),
+                'terms_version' => $context['terms_version'] ?? config('legal.terms_version'),
+                'privacy_version' => $context['privacy_version'] ?? config('legal.privacy_version'),
+                'legal_acceptance_ip' => ($context['ip'] ?? '') !== '' ? mb_substr((string) $context['ip'], 0, 45) : null,
+                'legal_acceptance_user_agent' => ($context['user_agent'] ?? '') !== '' ? mb_substr((string) $context['user_agent'], 0, 500) : null,
             ]);
         } else {
             $wasUnverified = !$account->hasVerifiedEmail();
-            $account->forceFill([
+            $updates = [
                 'name' => $account->name ?: $name,
                 'email' => $account->email ?: $email,
                 'provider' => $provider,
@@ -376,7 +410,17 @@ class SocialAuthController extends Controller
                 'avatar_url' => $avatar ?: $account->avatar_url,
                 'email_verified_at' => $account->email_verified_at ?: now(),
                 'last_login_at' => now(),
-            ])->save();
+            ];
+            if (($context['mode'] ?? 'login') === 'register') {
+                $updates += [
+                    'terms_accepted_at' => $context['terms_accepted_at'] ?? now(),
+                    'terms_version' => $context['terms_version'] ?? config('legal.terms_version'),
+                    'privacy_version' => $context['privacy_version'] ?? config('legal.privacy_version'),
+                    'legal_acceptance_ip' => ($context['ip'] ?? '') !== '' ? mb_substr((string) $context['ip'], 0, 45) : null,
+                    'legal_acceptance_user_agent' => ($context['user_agent'] ?? '') !== '' ? mb_substr((string) $context['user_agent'], 0, 500) : null,
+                ];
+            }
+            $account->forceFill($updates)->save();
 
             // A social provider proves control of the email address. If an
             // unverified local account had claimed it first, invalidate that
@@ -429,6 +473,10 @@ class SocialAuthController extends Controller
                     'plan_code' => trim((string) ($context['plan_code'] ?? 'start')) ?: 'start',
                     'fingerprint' => ($context['fingerprint'] ?? '') !== '' ? $context['fingerprint'] : null,
                     'ip' => ($context['ip'] ?? '') !== '' ? $context['ip'] : null,
+                    'user_agent' => ($context['user_agent'] ?? '') !== '' ? $context['user_agent'] : null,
+                    'terms_accepted_at' => $context['terms_accepted_at'] ?? now()->toIso8601String(),
+                    'terms_version' => $context['terms_version'] ?? config('legal.terms_version'),
+                    'privacy_version' => $context['privacy_version'] ?? config('legal.privacy_version'),
                 ],
                 true,
             ];
@@ -440,13 +488,23 @@ class SocialAuthController extends Controller
             ]);
         }
 
-        $user->forceFill([
+        $updates = [
             'name' => $user->name ?: $name,
             'provider' => $provider,
             'provider_id' => $providerId,
             'avatar_url' => $avatar ?: $user->avatar_url,
             'email_verified_at' => $user->email_verified_at ?: now(),
-        ])->save();
+        ];
+        if (($context['mode'] ?? 'login') === 'register') {
+            $updates += [
+                'terms_accepted_at' => $context['terms_accepted_at'] ?? now(),
+                'terms_version' => $context['terms_version'] ?? config('legal.terms_version'),
+                'privacy_version' => $context['privacy_version'] ?? config('legal.privacy_version'),
+                'legal_acceptance_ip' => ($context['ip'] ?? '') !== '' ? mb_substr((string) $context['ip'], 0, 45) : null,
+                'legal_acceptance_user_agent' => ($context['user_agent'] ?? '') !== '' ? mb_substr((string) $context['user_agent'], 0, 500) : null,
+            ];
+        }
+        $user->forceFill($updates)->save();
 
         $needsBusinessProfile = ($context['mode'] ?? 'login') === 'register'
             && $this->businessProfileNeedsCompletion($user);
@@ -508,6 +566,11 @@ class SocialAuthController extends Controller
                 'provider_id' => $registration['provider_id'],
                 'avatar_url' => $registration['avatar_url'] ?? null,
                 'email_verified_at' => now(),
+                'terms_accepted_at' => $registration['terms_accepted_at'] ?? now(),
+                'terms_version' => $registration['terms_version'] ?? config('legal.terms_version'),
+                'privacy_version' => $registration['privacy_version'] ?? config('legal.privacy_version'),
+                'legal_acceptance_ip' => !empty($registration['ip']) ? mb_substr((string) $registration['ip'], 0, 45) : null,
+                'legal_acceptance_user_agent' => !empty($registration['user_agent']) ? mb_substr((string) $registration['user_agent'], 0, 500) : null,
                 'show_in_public_team' => true,
                 'is_bookable' => true,
             ]);

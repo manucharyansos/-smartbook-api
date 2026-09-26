@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 
 class ClientAuthController extends Controller
 {
@@ -30,6 +31,9 @@ class ClientAuthController extends Controller
             'email' => ['required', 'email', 'max:190', 'unique:client_accounts,email'],
             'phone' => ['nullable', 'string', 'min:5', 'max:40', 'unique:client_accounts,phone'],
             'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
 
         $account = ClientAccount::query()->create([
@@ -37,6 +41,11 @@ class ClientAuthController extends Controller
             'email' => $linker->normalizeEmail($data['email'] ?? null),
             'phone' => $linker->normalizePhone($data['phone'] ?? null),
             'password' => Hash::make($data['password']),
+            'terms_accepted_at' => now(),
+            'terms_version' => $data['terms_version'],
+            'privacy_version' => $data['privacy_version'],
+            'legal_acceptance_ip' => mb_substr((string) $request->ip(), 0, 45),
+            'legal_acceptance_user_agent' => mb_substr((string) $request->userAgent(), 0, 500),
         ]);
 
         $verificationSent = $this->sendVerificationNotification($account);

@@ -40,7 +40,11 @@ it('creates an invoice, opens a mock checkout session, and activates the subscri
     $upgrade = $this->postJson('/api/billing/upgrade-request', [
         'plan_code' => 'pro',
         'payment_method' => 'card',
-    ])->assertCreated();
+    ])
+        ->assertCreated()
+        ->assertJsonPath('provider.checkout_available', true)
+        ->assertJsonMissingPath('payment.bank_transfer')
+        ->assertJsonMissingPath('payment.idram');
 
     $invoiceId = $upgrade->json('data.id');
 
@@ -135,4 +139,88 @@ it('never activates a cancelled invoice from a late mock callback', function () 
 
     expect(Subscription::query()->where('business_id', $business->id)->exists())->toBeFalse()
         ->and($transaction->refresh()->status)->toBe('paid');
+});
+
+it('never exposes mock checkout in production even when the flag is enabled', function () {
+    $business = Business::factory()->onboardingCompleted()->create();
+    $owner = User::factory()->owner($business->id)->create();
+    $plan = Plan::query()->create([
+        'name' => 'Production guard',
+        'code' => 'production-guard',
+        'price' => 7900,
+        'currency' => 'AMD',
+        'seats' => 1,
+        'staff_limit' => 1,
+        'duration_days' => 30,
+        'features' => ['staff_limit' => 1],
+        'is_active' => true,
+        'is_visible' => true,
+    ]);
+    $invoice = Invoice::query()->create([
+        'business_id' => $business->id,
+        'plan_id' => $plan->id,
+        'amount' => 7900,
+        'currency' => 'AMD',
+        'status' => 'pending',
+    ]);
+
+    Sanctum::actingAs($owner);
+    app()->detectEnvironment(fn () => 'production');
+    config()->set('billing.providers.default', 'idbank_mock');
+    config()->set('billing.providers.mode', 'mock');
+    config()->set('billing.allow_mock_payments', true);
+
+    try {
+        $this->postJson('/api/billing/checkout-session', [
+            'invoice_id' => $invoice->id,
+            'provider' => 'idbank_mock',
+            'payment_method' => 'card',
+        ])
+            ->assertStatus(503)
+            ->assertJsonPath('code', 'mock_payments_disabled');
+    } finally {
+        app()->detectEnvironment(fn () => 'testing');
+    }
+});
+
+it('keeps live IDBank checkout closed until the official contract mapping is ready', function () {
+    $business = Business::factory()->onboardingCompleted()->create();
+    $owner = User::factory()->owner($business->id)->create();
+    $plan = Plan::query()->create([
+        'name' => 'Live guard',
+        'code' => 'live-guard',
+        'price' => 7900,
+        'currency' => 'AMD',
+        'seats' => 1,
+        'staff_limit' => 1,
+        'duration_days' => 30,
+        'features' => ['staff_limit' => 1],
+        'is_active' => true,
+        'is_visible' => true,
+    ]);
+    $invoice = Invoice::query()->create([
+        'business_id' => $business->id,
+        'plan_id' => $plan->id,
+        'amount' => 7900,
+        'currency' => 'AMD',
+        'status' => 'pending',
+    ]);
+
+    Sanctum::actingAs($owner);
+    config()->set('billing.providers.default', 'idbank');
+    config()->set('billing.providers.mode', 'live');
+    config()->set('billing.providers.idbank.live_enabled', true);
+    config()->set('billing.providers.idbank.contract_mapping_ready', false);
+    config()->set('billing.providers.idbank.merchant_id', 'merchant');
+    config()->set('billing.providers.idbank.terminal_id', 'terminal');
+    config()->set('billing.providers.idbank.secret', 'secret');
+    config()->set('billing.providers.idbank.webhook_secret', 'webhook-secret');
+
+    $this->postJson('/api/billing/checkout-session', [
+        'invoice_id' => $invoice->id,
+        'provider' => 'idbank',
+        'payment_method' => 'card',
+    ])
+        ->assertStatus(503)
+        ->assertJsonPath('code', 'live_payments_disabled');
 });

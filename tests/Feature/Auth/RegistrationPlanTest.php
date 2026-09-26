@@ -39,6 +39,9 @@ function registrationPayload(array $overrides = []): array
         'email' => 'owner@example.com',
         'password' => 'SecurePassword123!',
         'password_confirmation' => 'SecurePassword123!',
+        'legal_accepted' => true,
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
     ], $overrides);
 }
 
@@ -79,6 +82,29 @@ it('starts the trial with the visible self-serve plan selected on pricing', func
         'longitude' => 44.5035,
         'is_primary' => true,
     ]);
+    $this->assertDatabaseHas('users', [
+        'email' => 'owner@example.com',
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
+    ]);
+});
+
+it('requires acceptance of the current legal documents before registration', function () {
+    registrationPlan();
+
+    $this->postJson('/api/auth/register', registrationPayload([
+        'legal_accepted' => false,
+    ]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('legal_accepted');
+
+    $this->postJson('/api/auth/register', registrationPayload([
+        'terms_version' => 'outdated',
+    ]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('terms_version');
+
+    $this->assertDatabaseCount('businesses', 0);
 });
 
 it('rejects hidden or sales-assisted plans during self-service registration', function () {

@@ -49,6 +49,16 @@ beforeEach(function () {
     Mail::fake();
 });
 
+it('requires current legal acceptance before starting social registration', function () {
+    $this->getJson('/api/auth/social/google/redirect?' . http_build_query([
+        'callback_url' => 'https://vizit.am/auth/social/callback',
+        'mode' => 'register',
+        'audience' => 'client',
+    ]))
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('legal_accepted');
+});
+
 it('publishes only social providers that are fully configured', function () {
     $this->getJson('/api/auth/social/providers')
         ->assertOk()
@@ -228,6 +238,9 @@ it('completes Facebook client authentication using the server-side code exchange
         'callback_url' => 'https://vizit.am/auth/social/callback',
         'mode' => 'register',
         'audience' => 'client',
+        'legal_accepted' => true,
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
     ]));
     parse_str(parse_url((string) $redirect->headers->get('Location'), PHP_URL_QUERY) ?: '', $providerQuery);
     $contextCookie = collect($redirect->headers->getCookies())
@@ -287,6 +300,9 @@ it('creates a complete business and primary location through Google registration
         'audience' => 'business',
         'business_type' => 'beauty',
         'plan_code' => 'start',
+        'legal_accepted' => true,
+        'terms_version' => config('legal.terms_version'),
+        'privacy_version' => config('legal.privacy_version'),
     ]));
 
     parse_str(parse_url((string) $redirect->headers->get('Location'), PHP_URL_QUERY) ?: '', $providerQuery);

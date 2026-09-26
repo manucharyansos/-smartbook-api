@@ -7,6 +7,7 @@ use App\Models\ContactRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 use App\Mail\ContactRequestReceived;
 
 class ContactRequestController extends Controller
@@ -18,6 +19,8 @@ class ContactRequestController extends Controller
             'email' => ['nullable', 'required_without:phone', 'email', 'max:255'],
             'phone' => ['nullable', 'required_without:email', 'string', 'min:5', 'max:40'],
             'message' => ['required', 'string', 'min:3', 'max:5000'],
+            'privacy_accepted' => ['required', 'accepted'],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
 
         $businessId = $request->user()?->business_id;
@@ -29,6 +32,10 @@ class ContactRequestController extends Controller
             'message' => trim($data['message']),
             'business_id' => $businessId,
             'status' => 'new',
+            'privacy_accepted_at' => now(),
+            'privacy_version' => $data['privacy_version'],
+            'legal_acceptance_ip' => $request->ip(),
+            'legal_acceptance_user_agent' => mb_substr((string) $request->userAgent(), 0, 1024),
         ]);
 
         // Queue admin email so the public contact form stays fast.

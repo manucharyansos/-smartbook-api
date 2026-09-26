@@ -17,7 +17,8 @@ class BillingWebhookController extends Controller
 
     public function idbank(Request $request)
     {
-        if (!config('billing.providers.idbank.live_enabled', false)) {
+        if (!config('billing.providers.idbank.live_enabled', false)
+            || !config('billing.providers.idbank.contract_mapping_ready', false)) {
             return response()->json([
                 'message' => 'IDBank live webhook-ը միացված չէ։',
                 'code' => 'live_payments_disabled',
@@ -230,6 +231,10 @@ class BillingWebhookController extends Controller
 
     private function ensureMockPaymentsAreAllowed(): void
     {
-        abort_unless(config('billing.allow_mock_payments', false), 404);
+        abort_unless(
+            app()->environment(['local', 'testing'])
+                && config('billing.allow_mock_payments', false),
+            404
+        );
     }
 }

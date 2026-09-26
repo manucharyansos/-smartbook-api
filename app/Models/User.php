@@ -36,6 +36,11 @@ class User extends Authenticatable
         'bio',
         'provider',
         'provider_id',
+        'terms_accepted_at',
+        'terms_version',
+        'privacy_version',
+        'legal_acceptance_ip',
+        'legal_acceptance_user_agent',
     ];
 
     protected $hidden = [
@@ -51,6 +56,7 @@ class User extends Authenticatable
         'show_in_public_team' => 'boolean',
         'location_id' => 'integer',
         'is_bookable' => 'boolean',
+        'terms_accepted_at' => 'datetime',
     ];
 
     // ✅ Use business relationship, not salon

@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rule;
 
 class AuthController extends Controller
 {
@@ -170,6 +171,9 @@ class AuthController extends Controller
             'name' => ['required','string','min:2','max:120'],
             'email' => ['required','email','max:255','unique:users,email'],
             'password' => ['required','string','min:8','max:255','confirmed'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
         ]);
 
         $phoneNorm = Phone::normalizeAM($data['business_phone'] ?? null);
@@ -298,6 +302,11 @@ class AuthController extends Controller
                 'email' => $data['email'],
                 'password' => Hash::make($data['password']),
                 'role' => User::ROLE_OWNER,
+                'terms_accepted_at' => now(),
+                'terms_version' => $data['terms_version'],
+                'privacy_version' => $data['privacy_version'],
+                'legal_acceptance_ip' => mb_substr((string) $request->ip(), 0, 45),
+                'legal_acceptance_user_agent' => mb_substr((string) $request->userAgent(), 0, 500),
                 'business_id' => $business->id,
                 'location_id' => $primaryLocation->id,
                 'show_in_public_team' => true,

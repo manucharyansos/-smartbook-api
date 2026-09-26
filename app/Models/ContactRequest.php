@@ -15,11 +15,16 @@ class ContactRequest extends Model
         'phone',
         'message',
         'business_id',    // փոխել salon_id-ից business_id
-        'status'
+        'status',
+        'privacy_accepted_at',
+        'privacy_version',
+        'legal_acceptance_ip',
+        'legal_acceptance_user_agent',
     ];
 
     protected $casts = [
-        'status' => 'string'
+        'status' => 'string',
+        'privacy_accepted_at' => 'datetime',
     ];
 
     public function business()
