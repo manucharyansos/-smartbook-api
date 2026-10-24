@@ -591,6 +591,7 @@ class PublicBookingController extends Controller
                 'hourly_price' => $business->rental_hourly_price, 'currency' => 'AMD',
                 'min_minutes' => $business->rental_min_minutes, 'max_minutes' => $business->rental_max_minutes,
                 'buffer_minutes' => $business->rental_buffer_minutes, 'slot_step_minutes' => (int) $business->slot_step_minutes,
+                'allow_overnight' => (bool) $business->rental_allow_overnight,
             ] : null,
             'instagram_url' => $business->instagram_url,
             'facebook_url' => $business->facebook_url,

@@ -13,6 +13,10 @@ use Illuminate\Validation\ValidationException;
 
 class RentalBookingService
 {
+    public const MAX_MINUTES = 30 * 24 * 60;
+
+    public const MAX_PRICE = 4294967295;
+
     public function assertBookable(Business $business): void
     {
         abort_unless($business->isRental(), 404);
@@ -26,8 +30,11 @@ class RentalBookingService
     public function validateDuration(Business $business, int $minutes): void
     {
         $step = max(5, min(60, (int) $business->slot_step_minutes));
-        if ($minutes < $business->rental_min_minutes || $minutes > $business->rental_max_minutes || $minutes % $step !== 0) {
+        if ($minutes < $business->rental_min_minutes || $minutes > min(self::MAX_MINUTES, $business->rental_max_minutes) || $minutes % $step !== 0) {
             throw ValidationException::withMessages(['duration_minutes' => 'Ընտրեք թույլատրելի տևողություն։']);
+        }
+        if ($this->price($business, $minutes) > self::MAX_PRICE) {
+            throw ValidationException::withMessages(['duration_minutes' => 'Ընտրված տևողության ընդհանուր գինը գերազանցում է թույլատրելի սահմանը։']);
         }
     }
 
@@ -49,11 +56,8 @@ class RentalBookingService
 
     public function assertAvailable(Business $business, Carbon $start, Carbon $end, ?int $ignoreId = null): void
     {
-        $local = $start->copy()->timezone($business->effectiveTimezone());
-        $schedule = app(ScheduleWindowService::class);
-        $windows = array_merge($schedule->intervalsFor($business, $local->copy()->subDay()), $schedule->intervalsFor($business, $local));
-        $withinHours = collect($windows)->contains(fn ($window) => $start->gte($window['start']) && $end->lte($window['end']));
-        if ($start->lte(now()) || ! $withinHours) {
+        $windows = $this->scheduleWindows($business, $start, $end);
+        if ($start->lte(now()) || ! $this->fitsSchedule($business, $start, $end, $windows)) {
             throw ValidationException::withMessages(['starts_at' => 'Ընտրված ժամը հասանելի ժամանակացույցից դուրս է։']);
         }
         $step = max(5, min(60, (int) $business->slot_step_minutes));
@@ -86,31 +90,34 @@ class RentalBookingService
         }
         $step = max(5, min(60, (int) $business->slot_step_minutes));
         $buffer = (int) $business->rental_buffer_minutes;
-        $from = $day->copy()->subDay()->utc();
-        $to = $day->copy()->addDays(2)->utc();
+        // A long rental can collide with a reservation several days after arrival.
+        $from = $day->copy()->subMinutes($buffer)->utc();
+        $to = $day->copy()->addDay()->addMinutes($minutes + $buffer)->utc();
         $busy = $this->reservations($business)->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
             ->where('starts_at', '<', $to)->where('ends_at', '>', $from)->get(['starts_at', 'ends_at']);
         $blocks = BookingBlock::query()->where('business_id', $business->id)->whereNull('staff_id')
             ->where('starts_at', '<', $to)->where('ends_at', '>', $from)->get(['starts_at', 'ends_at']);
         $slots = [];
-        $schedule = app(ScheduleWindowService::class);
-        $windows = array_merge($schedule->intervalsFor($business, $day->copy()->subDay()), $schedule->intervalsFor($business, $day));
+        $windows = $this->scheduleWindows($business, $day, $day->copy()->addDay()->addMinutes($minutes));
         foreach ($windows as $window) {
             $start = $window['start']->copy()->max($day)->seconds(0);
             $remainder = ($start->hour * 60 + $start->minute) % $step;
             if ($remainder) {
                 $start->addMinutes($step - $remainder);
             }
-            for (; $start->lt($day->copy()->addDay()) && $start->copy()->addMinutes($minutes)->lte($window['end']); $start->addMinutes($step)) {
+            for (; $start->lt($day->copy()->addDay()) && $start->lt($window['end']); $start->addMinutes($step)) {
                 if ($start->lte(now())) {
                     continue;
                 }
                 $end = $start->copy()->addMinutes($minutes);
+                if (! $this->fitsSchedule($business, $start, $end, $windows)) {
+                    continue;
+                }
                 $overlap = $busy->contains(fn ($booking) => $booking->starts_at->lt($end->copy()->addMinutes($buffer))
                     && $booking->ends_at->gt($start->copy()->subMinutes($buffer)));
                 $blocked = $blocks->contains(fn ($block) => $block->starts_at->lt($end) && $block->ends_at->gt($start));
                 if (! $overlap && ! $blocked) {
-                    $slots[] = [
+                    $slots[$start->format('Y-m-d H:i')] = [
                         'starts_at' => $start->format('Y-m-d H:i'), 'ends_at' => $end->format('Y-m-d H:i'),
                         'price' => $this->price($business, $minutes), 'currency' => 'AMD',
                     ];
@@ -118,7 +125,54 @@ class RentalBookingService
             }
         }
 
-        return $slots;
+        ksort($slots);
+
+        return array_values($slots);
+    }
+
+    /** Merge touching windows so an uninterrupted 24-hour schedule supports several days. */
+    private function scheduleWindows(Business $business, Carbon $from, Carbon $to): array
+    {
+        $timezone = $business->effectiveTimezone();
+        $lastDay = $to->copy()->timezone($timezone)->startOfDay();
+        $schedule = app(ScheduleWindowService::class);
+        $windows = [];
+        for ($day = $from->copy()->timezone($timezone)->startOfDay()->subDay(); $day->lte($lastDay); $day->addDay()) {
+            foreach ($schedule->intervalsFor($business, $day) as $window) {
+                $windows[] = $window;
+            }
+        }
+        usort($windows, fn ($left, $right) => $left['start']->getTimestamp() <=> $right['start']->getTimestamp());
+        $merged = [];
+        foreach ($windows as $window) {
+            $last = count($merged) - 1;
+            if ($last >= 0 && $window['start']->lte($merged[$last]['end'])) {
+                $merged[$last]['end'] = $merged[$last]['end']->copy()->max($window['end']);
+            } else {
+                $merged[] = $window;
+            }
+        }
+
+        return $merged;
+    }
+
+    private function fitsSchedule(Business $business, Carbon $start, Carbon $end, array $windows): bool
+    {
+        if ($end->lte($start)) {
+            return false;
+        }
+        if (collect($windows)->contains(fn ($window) => $start->gte($window['start']) && $end->lte($window['end']))) {
+            return true;
+        }
+        $timezone = $business->effectiveTimezone();
+        if (! $business->rental_allow_overnight || $start->copy()->timezone($timezone)->isSameDay($end->copy()->timezone($timezone))) {
+            return false;
+        }
+
+        // Overnight rentals retain the space during closed hours too. Only handover
+        // times must be open; bookings and explicit blocks still cover the full stay.
+        return collect($windows)->contains(fn ($window) => $start->gte($window['start']) && $start->lt($window['end']))
+            && collect($windows)->contains(fn ($window) => $end->gt($window['start']) && $end->lte($window['end']));
     }
 
     /** Every writer locks the business row before checking intervals. */
