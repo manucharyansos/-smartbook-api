@@ -51,6 +51,7 @@ class Business extends Model
         'rental_min_minutes',
         'rental_max_minutes',
         'rental_buffer_minutes',
+        'rental_allow_overnight',
     ];
 
     protected $casts = [
@@ -68,6 +69,7 @@ class Business extends Model
         'rental_min_minutes' => 'integer',
         'rental_max_minutes' => 'integer',
         'rental_buffer_minutes' => 'integer',
+        'rental_allow_overnight' => 'boolean',
     ];
 
     // Relations

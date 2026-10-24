@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\BusinessMedia;
+use App\Services\RentalBookingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -44,6 +45,8 @@ class RentalSettingsController extends Controller
             'min_minutes' => $business->rental_min_minutes,
             'max_minutes' => $business->rental_max_minutes,
             'buffer_minutes' => $business->rental_buffer_minutes,
+            'allow_overnight' => (bool) $business->rental_allow_overnight,
+            'timezone' => $business->effectiveTimezone(),
             'slot_step_minutes' => (int) $business->slot_step_minutes,
             'gallery' => $business->gallery()->get(),
         ]]);
@@ -54,13 +57,17 @@ class RentalSettingsController extends Controller
         $business = $this->business($request);
         $data = $request->validate([
             'hourly_price' => ['required', 'integer', 'min:0', 'max:100000000'],
-            'min_minutes' => ['required', 'integer', 'min:15', 'max:1440'],
-            'max_minutes' => ['required', 'integer', 'gte:min_minutes', 'max:1440'],
+            'min_minutes' => ['required', 'integer', 'min:15', 'max:'.RentalBookingService::MAX_MINUTES],
+            'max_minutes' => ['required', 'integer', 'gte:min_minutes', 'max:'.RentalBookingService::MAX_MINUTES],
+            'allow_overnight' => ['sometimes', 'boolean'],
             'buffer_minutes' => ['required', 'integer', 'min:0', 'max:240'],
             'slot_step_minutes' => ['required', 'integer', 'in:5,10,15,20,30,60'],
         ]);
         if ($data['min_minutes'] % $data['slot_step_minutes'] || $data['max_minutes'] % $data['slot_step_minutes']) {
             throw ValidationException::withMessages(['min_minutes' => 'Տևողությունները պետք է բաժանվեն ժամային քայլի վրա։']);
+        }
+        if (ceil($data['hourly_price'] * $data['max_minutes'] / 60) > RentalBookingService::MAX_PRICE) {
+            throw ValidationException::withMessages(['max_minutes' => 'Այս ժամավարձով առավելագույն տևողության գինը գերազանցում է թույլատրելի սահմանը։']);
         }
         DB::transaction(function () use ($business, $data) {
             $business = Business::query()->lockForUpdate()->findOrFail($business->id);
@@ -68,6 +75,7 @@ class RentalSettingsController extends Controller
                 'rental_hourly_price' => $data['hourly_price'], 'rental_min_minutes' => $data['min_minutes'],
                 'rental_max_minutes' => $data['max_minutes'], 'rental_buffer_minutes' => $data['buffer_minutes'],
                 'slot_step_minutes' => $data['slot_step_minutes'], 'show_services' => false, 'show_staff' => false,
+                'rental_allow_overnight' => $data['allow_overnight'] ?? $business->rental_allow_overnight,
             ]);
         });
         $request->user()->unsetRelation('business');

@@ -69,6 +69,13 @@ it('publishes only social providers that are fully configured', function () {
 });
 
 it('completes client Google login through a state-protected one-time exchange', function () {
+    // Login links an existing registered account; it must not implicitly register
+    // a new customer without the separate registration and legal-acceptance flow.
+    ClientAccount::query()->create([
+        'name' => 'Vizit Client', 'email' => 'client@example.com', 'password' => 'existing-test-password',
+        'email_verified_at' => now(), 'terms_accepted_at' => now(),
+        'terms_version' => config('legal.terms_version'), 'privacy_version' => config('legal.privacy_version'),
+    ]);
     Http::fake([
         'https://oauth2.googleapis.com/token' => Http::response([
             'access_token' => 'provider-access-token',
@@ -132,6 +139,26 @@ it('completes client Google login through a state-protected one-time exchange', 
         ->assertUnprocessable();
 
     expect(ClientAccount::query()->where('email', 'client@example.com')->count())->toBe(1);
+});
+
+it('does not silently register a new customer during Google login', function () {
+    Http::fake([
+        'https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'test-provider-token']),
+        'https://openidconnect.googleapis.com/v1/userinfo' => Http::response([
+            'sub' => 'unregistered-google-user', 'email' => 'unregistered@example.com', 'email_verified' => true, 'name' => 'New Customer',
+        ]),
+    ]);
+    $redirect = $this->get('/api/auth/social/google/redirect?'.http_build_query([
+        'callback_url' => 'https://vizit.am/auth/social/callback', 'mode' => 'login', 'audience' => 'client',
+    ]));
+    parse_str(parse_url((string) $redirect->headers->get('Location'), PHP_URL_QUERY) ?: '', $providerQuery);
+    $cookie = collect($redirect->headers->getCookies())->first(fn ($cookie) => $cookie->getName() === 'sb_social_auth_ctx');
+    $callback = $this->withUnencryptedCookie($cookie->getName(), $cookie->getValue())->get('/api/auth/social/google/callback?'.http_build_query([
+        'code' => 'test-provider-code', 'state' => $providerQuery['state'],
+    ]))->assertRedirect();
+    parse_str(parse_url((string) $callback->headers->get('Location'), PHP_URL_QUERY) ?: '', $query);
+    expect($query['code'] ?? null)->toBeNull()->and($query['message'] ?? '')->toContain('հաճախորդի հաշիվ չգտնվեց');
+    $this->assertDatabaseMissing('client_accounts', ['email' => 'unregistered@example.com']);
 });
 
 it('rejects a social callback whose state does not match the encrypted context', function () {
