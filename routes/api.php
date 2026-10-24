@@ -602,3 +602,22 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::patch('/plans/{plan}/toggle-active', [AdminPlanController::class, 'toggleActive'])->middleware('admin:super_admin');
     Route::patch('/plans/{plan}/toggle-visible', [AdminPlanController::class, 'toggleVisible'])->middleware('admin:super_admin');
 });
+
+// Space reservations share authentication, tenant and billing guards with the workspace.
+Route::get('/public/businesses/{slug}/rental-availability', [PublicBookingController::class, 'rentalAvailability'])->middleware('throttle:120,1');
+Route::middleware(['auth:sanctum', 'ensure.business', 'role:owner,manager'])->group(function () {
+    Route::get('/rental/schedule', [\App\Http\Controllers\Api\RentalSettingsController::class, 'schedule']);
+    Route::put('/rental/schedule', [\App\Http\Controllers\Api\RentalSettingsController::class, 'saveSchedule']);
+    Route::get('/rental/settings', [\App\Http\Controllers\Api\RentalSettingsController::class, 'show']);
+    Route::put('/rental/settings', [\App\Http\Controllers\Api\RentalSettingsController::class, 'update']);
+    Route::post('/rental/gallery', [\App\Http\Controllers\Api\RentalSettingsController::class, 'upload'])->middleware('throttle:30,1');
+    Route::patch('/rental/gallery/{media}', [\App\Http\Controllers\Api\RentalSettingsController::class, 'updateMedia']);
+    Route::delete('/rental/gallery/{media}', [\App\Http\Controllers\Api\RentalSettingsController::class, 'destroyMedia']);
+});
+Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensure.billable', 'role:owner,manager'])->group(function () {
+    Route::get('/rental/bookings', [\App\Http\Controllers\Api\RentalController::class, 'index']);
+    Route::post('/rental/bookings', [\App\Http\Controllers\Api\RentalController::class, 'store']);
+    Route::patch('/rental/bookings/{booking}', [\App\Http\Controllers\Api\RentalController::class, 'update']);
+    Route::post('/rental/bookings/{booking}/payments', [\App\Http\Controllers\Api\RentalController::class, 'payment']);
+    Route::get('/rental/summary', [\App\Http\Controllers\Api\RentalController::class, 'summary']);
+});

@@ -77,6 +77,10 @@ class BusinessSettingsController extends Controller
         $nextVertical = array_key_exists('vertical', $data)
             ? BusinessVertical::normalize($data['vertical'])
             : $business->normalizedVertical();
+        if ($nextVertical !== $business->normalizedVertical()
+            && ($business->isRental() || $nextVertical === BusinessVertical::RENTALS)) {
+            throw \Illuminate\Validation\ValidationException::withMessages(['vertical' => 'Տարածքի համար ստեղծեք առանձին բիզնես։']);
+        }
 
         $updates = [
             'business_type' => $nextVertical,
@@ -121,6 +125,7 @@ class BusinessSettingsController extends Controller
             $updates['is_marketplace_visible'] = $marketplaceVisible;
         }
 
+        if ($business->isRental()) { $updates['show_staff'] = false; $updates['show_services'] = false; }
         $business->update($updates);
 
         if (array_key_exists('address', $data)) {

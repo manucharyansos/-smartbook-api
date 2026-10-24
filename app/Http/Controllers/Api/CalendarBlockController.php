@@ -103,13 +103,22 @@ class CalendarBlockController extends Controller
             ]);
         }
 
-        $block = BookingBlock::create([
+        $block = \Illuminate\Support\Facades\DB::transaction(function () use ($business, $user, $validated, $start, $end) {
+            if ($business?->isRental()) {
+                Business::query()->lockForUpdate()->findOrFail($business->id);
+                if (app(\App\Services\RentalBookingService::class)->reservations($business)->where('starts_at', '<', $end)->where('ends_at', '>', $start)->exists()) {
+                    throw ValidationException::withMessages(['starts_at' => 'Այդ ժամին կա գործող ամրագրում։']);
+                }
+                $validated['staff_id'] = null;
+            }
+            return BookingBlock::create([
             'business_id' => $user->business_id,
             'staff_id' => $validated['staff_id'] ?? null,
             'starts_at' => $start,
             'ends_at' => $end,
             'reason' => $validated['reason'] ?? null,
         ]);
+        });
 
         return response()->json(['data' => $this->serializeBlock($block, $timezone)], 201);
     }

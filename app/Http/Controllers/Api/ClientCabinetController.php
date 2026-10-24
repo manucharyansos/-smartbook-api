@@ -27,7 +27,7 @@ class ClientCabinetController extends Controller
 
         $bookings = Booking::query()
             ->with([
-                'business:id,name,slug,logo_url,address',
+                'business:id,name,slug,logo_url,address,business_type',
                 'service:id,name,duration_minutes,price,currency',
                 'staff:id,name,avatar_url',
             ])
@@ -63,8 +63,8 @@ class ClientCabinetController extends Controller
                     'address' => $booking->business?->address,
                 ],
                 'service' => [
-                    'name' => $booking->service?->name,
-                    'duration_minutes' => $booking->service?->duration_minutes,
+                    'name' => $booking->service?->name ?: ($booking->business?->isRental() ? $booking->business->name : null),
+                    'duration_minutes' => $booking->service?->duration_minutes ?? (int) $booking->starts_at->diffInMinutes($booking->ends_at),
                     'price' => $booking->service?->price,
                     'currency' => $booking->service?->currency,
                 ],

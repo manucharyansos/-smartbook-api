@@ -22,12 +22,16 @@ class BusinessOnboardingController extends Controller
         $business = $user->business;
         if (!$business) return response()->json(['message' => 'Business not found'], 404);
 
+        if ($business->isRental() && $business->rental_hourly_price === null) {
+            return response()->json(['message' => 'Նշեք տարածքի մեկ ժամվա վարձը։'], 422);
+        }
+
         $updates = ['is_onboarding_completed' => true, 'is_public' => true];
         if (Schema::hasColumn('businesses', 'is_public_profile_enabled')) $updates['is_public_profile_enabled'] = true;
         if (Schema::hasColumn('businesses', 'is_marketplace_visible')) $updates['is_marketplace_visible'] = true;
         $business->update($updates);
 
-        if (Schema::hasColumn('users', 'is_bookable') && Schema::hasColumn('users', 'show_in_public_team')) {
+        if (!$business->isRental() && Schema::hasColumn('users', 'is_bookable') && Schema::hasColumn('users', 'show_in_public_team')) {
             $hasBookableProvider = $business->users()->where('is_active', true)->where('is_bookable', true)->exists();
             if (!$hasBookableProvider) {
                 $business->users()->where('role', User::ROLE_OWNER)->where('is_active', true)->limit(1)->update([
@@ -73,6 +77,7 @@ class BusinessOnboardingController extends Controller
     private function getOnboardingStep(Business $business): string
     {
         if ($business->is_onboarding_completed) return 'completed';
+        if ($business->isRental()) return $business->rental_hourly_price === null ? 'rental' : 'schedule';
         if (!$business->services()->exists()) return 'services';
         if (!$this->hasConfiguredSchedule($business)) return 'schedule';
         return 'settings';

@@ -44,14 +44,18 @@ class Plan extends Model
 
     public static function normalizeBusinessType(string $type): string
     {
-        $vertical = BusinessVertical::normalize($type);
-        return $vertical === BusinessVertical::HEALTHCARE ? 'dental' : 'beauty';
+        return BusinessVertical::legacyBusinessType($type);
     }
 
     public function allowsBusinessType(string $type): bool
     {
         $type = self::normalizeBusinessType($type);
         $allowed = $this->allowed_business_types;
+
+        // A venue subscription must never be interchangeable with staff-based plans.
+        if ($type === BusinessVertical::RENTALS || $this->code === 'rental') {
+            return $type === BusinessVertical::RENTALS && $this->code === 'rental';
+        }
 
         if (!is_array($allowed) || count($allowed) === 0) {
             if ($this->business_type === null) return true;
@@ -129,6 +133,20 @@ class Plan extends Model
     public function getFeaturesList(): array
     {
         $f = is_array($this->features) ? $this->features : [];
+        if ($this->code === 'rental') {
+            return [
+                'staff_limit' => 0, 'services_limit' => 0, 'locations' => 1,
+                'staff_seat_based' => false, 'owners_unlimited' => true, 'managers_unlimited' => true,
+                'calendar' => true, 'bookings' => true, 'services' => false, 'staff_schedules' => false,
+                'public_booking' => true, 'client_cabinet' => true, 'analytics' => true,
+                'rentals' => true, 'gallery' => true, 'blocks' => true,
+                'tasks' => false, 'rooms' => false, 'gift_cards' => false, 'loyalty' => false,
+                'waitlist' => false, 'recurring_bookings' => false, 'group_bookings' => false,
+                'marketing' => false, 'source_tracking' => true, 'social_buttons' => true,
+                'multilingual' => true, 'dark_mode' => true, 'email_notifications' => true,
+                'telegram_notifications' => true, 'sms_reminders' => false, 'whatsapp_notifications' => false,
+            ];
+        }
         $staffLimit = (int)($f['staff_limit'] ?? $this->staffLimit());
         $servicesLimit = $f['services_limit'] ?? null;
         $servicesLimit = $servicesLimit === null || $servicesLimit === '' ? null : max(1, (int) $servicesLimit);

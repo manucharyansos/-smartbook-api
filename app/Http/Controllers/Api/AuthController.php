@@ -161,8 +161,8 @@ class AuthController extends Controller
             'business_district' => ['nullable','string','max:120'],
             'latitude' => ['required','numeric','between:-90,90'],
             'longitude' => ['required','numeric','between:-180,180'],
-            'business_type' => ['nullable','string','in:beauty,dental,salon,clinic,services,healthcare'],
-            'vertical' => ['nullable','string','in:services,healthcare'],
+            'business_type' => ['nullable','string','in:beauty,dental,salon,clinic,services,healthcare,rentals'],
+            'vertical' => ['nullable','string','in:services,healthcare,rentals'],
             'business_category_id' => ['nullable','integer','exists:business_categories,id'],
             'business_category_slug' => ['nullable','string','max:120'],
             'custom_category_name' => ['nullable','string','max:120'],
@@ -194,7 +194,8 @@ class AuthController extends Controller
         // belongs to business_category_id, not to the legacy beauty/dental field.
         $businessType = $vertical;
 
-        $requestedPlanCode = trim((string) ($data['plan_code'] ?? 'start')) ?: 'start';
+        $defaultPlan = $vertical === BusinessVertical::RENTALS ? 'rental' : 'start';
+        $requestedPlanCode = trim((string) ($data['plan_code'] ?? $defaultPlan)) ?: $defaultPlan;
         $plan = Plan::query()
             ->where('code', $requestedPlanCode)
             ->where('is_active', true)
@@ -257,6 +258,8 @@ class AuthController extends Controller
                 'phone' => $phoneNorm,
                 'address' => $data['business_address'] ?? null,
                 'status' => 'active',
+                'show_staff' => $vertical !== BusinessVertical::RENTALS,
+                'show_services' => $vertical !== BusinessVertical::RENTALS,
             ]);
 
             $primaryLocation = $business->locations()->create([
@@ -309,8 +312,8 @@ class AuthController extends Controller
                 'legal_acceptance_user_agent' => mb_substr((string) $request->userAgent(), 0, 500),
                 'business_id' => $business->id,
                 'location_id' => $primaryLocation->id,
-                'show_in_public_team' => true,
-                'is_bookable' => true,
+                'show_in_public_team' => $vertical !== BusinessVertical::RENTALS,
+                'is_bookable' => $vertical !== BusinessVertical::RENTALS,
             ]);
 
             $sub = new Subscription([

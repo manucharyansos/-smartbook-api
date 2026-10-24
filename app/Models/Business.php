@@ -47,6 +47,10 @@ class Business extends Model
         'work_end',
         'slot_step_minutes',
         'timezone',
+        'rental_hourly_price',
+        'rental_min_minutes',
+        'rental_max_minutes',
+        'rental_buffer_minutes',
     ];
 
     protected $casts = [
@@ -60,6 +64,10 @@ class Business extends Model
         'show_services' => 'boolean',
         'is_verified' => 'boolean',
         'suspended_at' => 'datetime',
+        'rental_hourly_price' => 'integer',
+        'rental_min_minutes' => 'integer',
+        'rental_max_minutes' => 'integer',
+        'rental_buffer_minutes' => 'integer',
     ];
 
     // Relations
@@ -153,6 +161,16 @@ class Business extends Model
     public function isServicesVertical(): bool
     {
         return $this->normalizedVertical() === BusinessVertical::SERVICES;
+    }
+
+    public function isRental(): bool
+    {
+        return $this->normalizedVertical() === BusinessVertical::RENTALS;
+    }
+
+    public function gallery()
+    {
+        return $this->hasMany(BusinessMedia::class)->orderBy('sort_order')->orderBy('id');
     }
 
     public function isHealthcareVertical(): bool

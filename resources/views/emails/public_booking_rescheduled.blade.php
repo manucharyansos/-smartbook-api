@@ -12,7 +12,7 @@
   $newLocal = $booking->starts_at?->copy()?->timezone($timezone);
   $services = $booking->items->count()
       ? $booking->items->map(fn($item) => $item->service?->name)->filter()->values()
-      : collect([$booking->service?->name])->filter();
+      : collect([$booking->service?->name ?: ($booking->business?->isRental() ? $booking->business->name : null)])->filter();
 @endphp
 <div style="max-width:680px;margin:0 auto;padding:28px 14px;">
   <div style="background:linear-gradient(135deg,#2b0d35 0%,#6d2a63 100%);border-radius:30px;padding:34px 28px;color:#fff;box-shadow:0 24px 60px rgba(75,22,75,.18);">
@@ -24,7 +24,7 @@
   <div style="margin-top:18px;background:#fff;border-radius:28px;padding:28px;border:1px solid #eadfd4;box-shadow:0 18px 42px rgba(75,36,52,.08);">
     <div style="font-size:20px;font-weight:700;">{{ $booking->business?->name }}</div>
     <div style="margin-top:16px;border-radius:22px;background:#fff8ef;border:1px solid #eadfd4;padding:18px;">
-      <div style="font-size:12px;color:#8b7a86;text-transform:uppercase;letter-spacing:.08em;">Ծառայություն</div>
+      <div style="font-size:12px;color:#8b7a86;text-transform:uppercase;letter-spacing:.08em;">{{ $booking->business?->isRental() ? 'Տարածք' : 'Ծառայություն' }}</div>
       <div style="margin-top:6px;font-size:17px;font-weight:700;">{{ $services->implode(', ') ?: 'Ծառայություն' }}</div>
       <div style="margin-top:16px;font-size:12px;color:#8b7a86;text-transform:uppercase;letter-spacing:.08em;">Նախկին ժամ</div>
       <div style="margin-top:6px;font-size:16px;color:#8b7a86;text-decoration:line-through;">{{ $oldLocal?->format('d.m.Y H:i') ?? '—' }}</div>

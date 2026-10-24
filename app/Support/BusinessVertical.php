@@ -6,6 +6,7 @@ final class BusinessVertical
 {
     public const SERVICES = 'services';
     public const HEALTHCARE = 'healthcare';
+    public const RENTALS = 'rentals';
 
     /**
      * Legacy and public aliases accepted by old frontend/API clients.
@@ -15,6 +16,7 @@ final class BusinessVertical
         $value = strtolower(trim((string) $value));
 
         return match ($value) {
+            self::RENTALS, 'rental', 'venue', 'space' => self::RENTALS,
             self::HEALTHCARE, 'medical', 'clinic', 'dental', 'doctor', 'health' => self::HEALTHCARE,
             default => self::SERVICES,
         };
@@ -27,7 +29,11 @@ final class BusinessVertical
 
     public static function legacyBusinessType(?string $vertical): string
     {
-        return self::normalize($vertical) === self::HEALTHCARE ? 'dental' : 'beauty';
+        return match (self::normalize($vertical)) {
+            self::HEALTHCARE => 'dental',
+            self::RENTALS => self::RENTALS,
+            default => 'beauty',
+        };
     }
 
     public static function canonicalBusinessType(?string $value): string
@@ -42,7 +48,7 @@ final class BusinessVertical
 
     public static function values(): array
     {
-        return [self::SERVICES, self::HEALTHCARE];
+        return [self::SERVICES, self::HEALTHCARE, self::RENTALS];
     }
 
     public static function legacyValues(): array

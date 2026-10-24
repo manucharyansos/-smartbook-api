@@ -10,8 +10,12 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use App\Support\InteractsWithOptionalLocationColumns;
 
-class ServiceController extends Controller
+class ServiceController extends Controller implements \Illuminate\Routing\Controllers\HasMiddleware
 {
+    public static function middleware(): array
+    {
+        return [\App\Http\Middleware\RejectRentalCatalog::class];
+    }
     use InteractsWithOptionalLocationColumns;
     public function index(Request $request)
     {

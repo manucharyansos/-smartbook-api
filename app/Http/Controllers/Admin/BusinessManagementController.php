@@ -38,9 +38,11 @@ class BusinessManagementController extends Controller
 
         if ($request->filled('business_type')) {
             $vertical = BusinessVertical::normalize((string) $request->business_type);
-            $legacyTypes = $vertical === BusinessVertical::HEALTHCARE
-                ? ['healthcare', 'dental', 'clinic']
-                : ['services', 'beauty', 'salon'];
+            $legacyTypes = match ($vertical) {
+                BusinessVertical::HEALTHCARE => ['healthcare', 'dental', 'clinic'],
+                BusinessVertical::RENTALS => ['rentals'],
+                default => ['services', 'beauty', 'salon'],
+            };
             $query->where(function ($builder) use ($vertical, $legacyTypes) {
                 $builder->where('vertical', $vertical)
                     ->orWhere(function ($legacyQuery) use ($legacyTypes) {

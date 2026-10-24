@@ -10,8 +10,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use App\Support\InteractsWithOptionalLocationColumns;
 
-class StaffController extends Controller
+class StaffController extends Controller implements \Illuminate\Routing\Controllers\HasMiddleware
 {
+    public static function middleware(): array
+    {
+        return [\App\Http\Middleware\RejectRentalCatalog::class];
+    }
     use InteractsWithOptionalLocationColumns;
     public function index(Request $request)
     {

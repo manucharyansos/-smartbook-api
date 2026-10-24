@@ -532,7 +532,7 @@ class AdminAnalyticsController extends Controller
     {
         $validated = $request->validate([
             'status' => 'nullable|in:active,suspended,pending',
-            'business_type' => 'nullable|in:services,healthcare,beauty,dental,salon,clinic',
+            'business_type' => 'nullable|in:services,healthcare,beauty,dental,salon,clinic,rentals',
             'from' => 'nullable|date',
             'to' => 'nullable|date|after_or_equal:from',
             'search' => 'nullable|string|max:100',

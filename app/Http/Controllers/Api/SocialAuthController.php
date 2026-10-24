@@ -59,7 +59,7 @@ class SocialAuthController extends Controller
             'callback_url' => ['required', 'url'],
             'mode' => ['nullable', 'in:login,register'],
             'audience' => ['nullable', 'in:business,client'],
-            'business_type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare'],
+            'business_type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare,rentals'],
             'plan_code' => ['nullable', 'string', 'max:80'],
             'legal_accepted' => ['nullable'],
             'terms_version' => ['nullable', 'string', 'max:20'],
@@ -97,7 +97,7 @@ class SocialAuthController extends Controller
         }
 
         if ($audience === 'business' && $mode === 'register') {
-            $planCode = trim((string) ($data['plan_code'] ?? 'start')) ?: 'start';
+            $planCode = trim((string) ($data['plan_code'] ?? ($businessType === BusinessVertical::RENTALS ? 'rental' : 'start'))) ?: 'start';
             if (!$this->selfServePlan($planCode, $businessType)) {
                 throw ValidationException::withMessages([
                     'plan_code' => 'The selected plan is not available for self-service registration.',
@@ -517,7 +517,7 @@ class SocialAuthController extends Controller
         $vertical = BusinessVertical::normalize(
             $registration['business_type'] ?? BusinessVertical::SERVICES
         );
-        $planCode = trim((string) ($registration['plan_code'] ?? 'start')) ?: 'start';
+        $planCode = trim((string) ($registration['plan_code'] ?? ($vertical === BusinessVertical::RENTALS ? 'rental' : 'start'))) ?: 'start';
         $plan = $this->selfServePlan($planCode, $vertical);
         if (!$plan) {
             throw ValidationException::withMessages([
@@ -540,6 +540,8 @@ class SocialAuthController extends Controller
                 'phone' => $data['business_phone'],
                 'address' => trim($data['business_address']),
                 'status' => 'active',
+                'show_staff' => $vertical !== BusinessVertical::RENTALS,
+                'show_services' => $vertical !== BusinessVertical::RENTALS,
             ]);
 
             $location = $business->locations()->create([
@@ -571,8 +573,8 @@ class SocialAuthController extends Controller
                 'privacy_version' => $registration['privacy_version'] ?? config('legal.privacy_version'),
                 'legal_acceptance_ip' => !empty($registration['ip']) ? mb_substr((string) $registration['ip'], 0, 45) : null,
                 'legal_acceptance_user_agent' => !empty($registration['user_agent']) ? mb_substr((string) $registration['user_agent'], 0, 500) : null,
-                'show_in_public_team' => true,
-                'is_bookable' => true,
+                'show_in_public_team' => $vertical !== BusinessVertical::RENTALS,
+                'is_bookable' => $vertical !== BusinessVertical::RENTALS,
             ]);
 
             $subscription = new Subscription([

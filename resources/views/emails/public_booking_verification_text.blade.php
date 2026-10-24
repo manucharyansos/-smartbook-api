@@ -5,7 +5,7 @@ Vizit.am — ամրագրման հաստատում
 Հաստատման կոդ՝ {{ $code }}
 Վավեր է մինչև՝ {{ $expires->copy()->timezone($booking->business?->timezone ?: config('app.timezone'))->format('d.m.Y H:i') }}
 
-Ծառայություն՝ {{ $booking->items->count() ? $booking->items->map(fn($item) => $item->service?->name)->filter()->implode(', ') : ($booking->service?->name ?: 'Ծառայություն') }}
+{{ $booking->business?->isRental() ? 'Տարածք' : 'Ծառայություն' }}՝ {{ $booking->items->count() ? $booking->items->map(fn($item) => $item->service?->name)->filter()->implode(', ') : ($booking->service?->name ?: ($booking->business?->isRental() ? $booking->business->name : 'Ծառայություն')) }}
 @if($booking->staff?->name)
 Մասնագետ՝ {{ $booking->staff?->name }}
 @endif

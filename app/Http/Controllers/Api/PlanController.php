@@ -11,7 +11,7 @@ class PlanController extends Controller
     public function index(Request $request)
     {
         $data = $request->validate([
-            'business_type' => ['nullable', 'string', 'in:beauty,dental,salon,clinic,services,healthcare'],
+            'business_type' => ['nullable', 'string', 'in:beauty,dental,salon,clinic,services,healthcare,rentals'],
         ]);
 
         $businessType = $data['business_type'] ?? null;
@@ -34,6 +34,7 @@ class PlanController extends Controller
                     'id' => $plan->id,
                     'name' => $plan->name,
                     'code' => $plan->code,
+                    'business_type' => $plan->code === 'rental' ? 'rentals' : null,
                     'version' => (int)($plan->version ?? 1),
                     'description' => $plan->description,
                     'price' => $monthlyPrice,
@@ -48,15 +49,15 @@ class PlanController extends Controller
                     'self_serve' => $plan->isSelfServe(),
                     'period' => 'ամիս',
                     'pricing_model' => [
-                        'staff_based' => true,
+                        'staff_based' => $plan->code !== 'rental',
                         'owners_unlimited' => true,
                         'managers_unlimited' => true,
                     ],
                     'yearly_offer' => [
                         'enabled' => !$isCustom && $yearlyPrice > 0,
                         'price' => $yearlyPrice,
-                        'months_charged' => 10,
-                        'months_free' => 2,
+                        'months_charged' => $plan->code === 'rental' ? 12 : 10,
+                        'months_free' => $plan->code === 'rental' ? 0 : 2,
                         'discount_amount' => max(($monthlyPrice * 12) - $yearlyPrice, 0),
                     ],
                 ];

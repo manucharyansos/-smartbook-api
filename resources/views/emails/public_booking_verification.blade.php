@@ -12,7 +12,7 @@
   $localStart = $booking->starts_at?->copy()?->timezone($tz);
   $services = $booking->items->count()
       ? $booking->items->map(fn($item) => $item->service?->name)->filter()->values()
-      : collect([$booking->service?->name])->filter();
+      : collect([$booking->service?->name ?: ($booking->business?->isRental() ? $booking->business->name : null)])->filter();
 @endphp
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
   {{ $booking->business?->name }} ամրագրման հաստատման կոդը՝ {{ $code }}։
@@ -51,7 +51,7 @@
           <td style="padding:18px 28px 8px;">
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border:1px solid #eee5df;border-radius:18px;background:#fcfaf8;">
               <tr>
-                <td style="padding:14px 16px;border-bottom:1px solid #eee5df;font-size:13px;color:#756778;">Ծառայություն</td>
+                <td style="padding:14px 16px;border-bottom:1px solid #eee5df;font-size:13px;color:#756778;">{{ $booking->business?->isRental() ? 'Տարածք' : 'Ծառայություն' }}</td>
                 <td align="right" style="padding:14px 16px;border-bottom:1px solid #eee5df;font-size:14px;font-weight:700;line-height:1.5;color:#28142b;">{{ $services->implode(', ') ?: 'Ծառայություն' }}</td>
               </tr>
               @if($booking->staff?->name)

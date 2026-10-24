@@ -11,7 +11,7 @@
   $localStart = $booking->starts_at?->copy()?->timezone($tz);
   $services = $booking->items->count()
       ? $booking->items->map(fn($item) => $item->service?->name)->filter()->values()
-      : collect([$booking->service?->name])->filter();
+      : collect([$booking->service?->name ?: ($booking->business?->isRental() ? $booking->business->name : null)])->filter();
 @endphp
 <div style="max-width:680px;margin:0 auto;padding:28px 14px;">
   <div style="background:linear-gradient(135deg,#ef4444 0%,#f97316 52%,#f59e0b 100%);border-radius:30px;padding:34px 28px;color:#fff;box-shadow:0 24px 60px rgba(15,23,42,.16);">
@@ -24,7 +24,7 @@
     <div style="display:inline-block;padding:8px 14px;border-radius:999px;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;">Չեղարկված</div>
     <div style="margin-top:18px;border-radius:24px;border:1px solid #e2e8f0;background:#f8fafc;padding:8px 18px;">
       <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Բիզնես</div><div style="margin-top:6px;font-size:20px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $booking->business?->name }}</div></div>
-      <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Ծառայություններ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.55;word-break:break-word;">{{ $services->implode(', ') ?: 'Ծառայություն' }}</div></div>
+      <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">{{ $booking->business?->isRental() ? 'Տարածք' : 'Ծառայություններ' }}</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.55;word-break:break-word;">{{ $services->implode(', ') ?: 'Ծառայություն' }}</div></div>
       @if($booking->staff?->name)
       <div style="padding:14px 0;border-bottom:1px solid #e2e8f0;"><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.08em;">Մասնագետ</div><div style="margin-top:6px;font-size:18px;font-weight:700;color:#0f172a;line-height:1.45;word-break:break-word;">{{ $booking->staff?->name }}</div></div>
       @endif

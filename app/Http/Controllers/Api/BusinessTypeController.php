@@ -21,9 +21,11 @@ class BusinessTypeController extends Controller
         }
 
         $vertical = $business->normalizedVertical();
-        $meta = $vertical === BusinessVertical::HEALTHCARE
+        $meta = $vertical === BusinessVertical::RENTALS
+            ? ['label' => 'Spaces for rent', 'label_hy' => 'Վարձով տարածքներ', 'icon' => 'building']
+            : ($vertical === BusinessVertical::HEALTHCARE
             ? ['label' => 'Healthcare', 'label_hy' => 'Բժշկական', 'icon' => 'stethoscope']
-            : ['label' => 'Services', 'label_hy' => 'Ծառայություններ', 'icon' => 'grid'];
+            : ['label' => 'Services', 'label_hy' => 'Ծառայություններ', 'icon' => 'grid']);
 
         return response()->json([
             'data' => [

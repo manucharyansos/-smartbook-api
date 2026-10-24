@@ -13,6 +13,7 @@ use App\Models\Room;
 use App\Models\Service;
 use App\Models\User;
 use App\Services\AvailabilityService;
+use App\Services\RentalBookingService;
 use App\Services\TelegramLinkService;
 use App\Services\TelegramService;
 use App\Services\ClientIdentityLinker;
@@ -40,6 +41,93 @@ use App\Notifications\BookingRescheduledNotification;
 class PublicBookingController extends Controller
 {
     use InteractsWithOptionalLocationColumns;
+
+    public function rentalAvailability(string $slug, Request $request, RentalBookingService $rentals)
+    {
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
+        $data = $request->validate(['date' => ['required', 'date_format:Y-m-d'], 'duration_minutes' => ['required', 'integer']]);
+        return response()->json(['data' => $rentals->slots($business, $data['date'], (int) $data['duration_minutes']),
+            'timezone' => $business->effectiveTimezone()])->header('Cache-Control', 'no-store');
+    }
+
+    private function storeRental(Business $business, Request $request)
+    {
+        $data = $request->validate([
+            'starts_at' => ['required', 'date_format:Y-m-d H:i'], 'duration_minutes' => ['required', 'integer'],
+            'client_name' => ['required', 'string', 'min:2', 'max:120'],
+            'client_phone' => ['required', 'string', 'max:40'], 'client_email' => ['required', 'email', 'max:150'],
+            'notes' => ['nullable', 'string', 'max:2000'], 'source' => ['nullable', 'in:website,mobile,instagram,facebook,whatsapp,widget,partner,qr'],
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
+            'service_id' => ['prohibited'], 'staff_id' => ['prohibited'], 'room_id' => ['prohibited'],
+        ]);
+        $data['client_phone'] = Phone::normalizeAM($data['client_phone']);
+        if (!$data['client_phone']) throw \Illuminate\Validation\ValidationException::withMessages(['client_phone' => 'Սխալ հեռախոսահամար։']);
+        $otp = (string) random_int(1000, 9999);
+        $expires = now()->addMinutes(10);
+        $booking = app(RentalBookingService::class)->create($business, $data, [
+            'status' => 'pending', 'source' => $data['source'] ?? 'website',
+            'phone_verification_code_hash' => Hash::make($otp), 'phone_verification_expires_at' => $expires,
+            ...$this->legalAcceptancePayload($request, $data),
+        ]);
+        $delivery = $this->sendVerificationNotifications($booking, $otp, $expires, $booking->contactEmail());
+        if (!$delivery['email'] && !$delivery['telegram']) {
+            $booking->update(['status' => 'cancelled']);
+            return response()->json(['message' => 'Հաստատման կոդը չհաջողվեց ուղարկել։ Փորձեք կրկին։'], 503);
+        }
+        return response()->json(['data' => [
+            'booking_code' => $booking->booking_code, 'needs_phone_verification' => true,
+            'phone' => $booking->client_phone, 'expires_at' => $expires->toISOString(), 'verification_delivery' => $delivery,
+        ]], 201);
+    }
+
+    private function verifyRental(Booking $booking, string $otp)
+    {
+        $result = DB::transaction(function () use ($booking, $otp) {
+            $business = Business::query()->lockForUpdate()->findOrFail($booking->business_id);
+            $booking = Booking::query()->lockForUpdate()->findOrFail($booking->id);
+            if ($booking->phone_verified_at || $booking->status !== 'pending') return ['error' => 'Ամրագրումը այլևս չի սպասում հաստատման։', 'status' => 422];
+            if (!$booking->phone_verification_expires_at?->isFuture()) return ['error' => 'Կոդի ժամկետն ավարտվել է։', 'status' => 422];
+            if ($booking->phone_verification_attempts >= 5) return ['error' => 'Փորձերի քանակը գերազանցված է։', 'status' => 429];
+            $booking->increment('phone_verification_attempts');
+            if (!Hash::check($otp, (string) $booking->phone_verification_code_hash)) return ['error' => 'Սխալ հաստատման կոդ։', 'status' => 422];
+            $rentals = app(RentalBookingService::class);
+            $rentals->assertBookable($business);
+            $rentals->assertAvailable($business, $booking->starts_at, $booking->ends_at, $booking->id);
+            $booking->update(['status' => 'confirmed', 'phone_verified_at' => now(), 'phone_verification_code_hash' => null,
+                'phone_verification_expires_at' => null, 'phone_verification_attempts' => 0]);
+            return ['booking' => $booking];
+        }, 3);
+        if (isset($result['error'])) return response()->json(['message' => $result['error']], $result['status']);
+        $booking = $result['booking'];
+        $token = $this->issueGuestAccessForBooking($booking);
+        $this->sendBookingConfirmedNotifications($booking, $token);
+        $this->sendBusinessBookingEmailNotifications($booking);
+        $this->sendBookingTelegramNotifications($booking, 'confirmed', $token);
+        return response()->json(['ok' => true, 'manage_token' => $token,
+            'manage_url' => $this->frontendManageUrl($booking, $token), 'data' => $this->publicBookingPayload($booking->fresh())]);
+    }
+
+    private function resendRental(Booking $booking)
+    {
+        $otp = (string) random_int(1000, 9999);
+        $expires = now()->addMinutes(10);
+        $booking = DB::transaction(function () use ($booking, $otp, $expires) {
+            $business = Business::query()->lockForUpdate()->findOrFail($booking->business_id);
+            $booking = Booking::query()->lockForUpdate()->findOrFail($booking->id);
+            abort_unless(!$booking->phone_verified_at && $booking->status === 'pending', 422);
+            app(RentalBookingService::class)->assertBookable($business);
+            app(RentalBookingService::class)->assertAvailable($business, $booking->starts_at, $booking->ends_at, $booking->id);
+            $booking->update(['phone_verification_code_hash' => Hash::make($otp),
+                'phone_verification_expires_at' => $expires, 'phone_verification_attempts' => 0]);
+            return $booking;
+        }, 3);
+        $delivery = $this->sendVerificationNotifications($booking, $otp, $expires, $booking->contactEmail());
+        return response()->json(['ok' => $delivery['email'] || $delivery['telegram'],
+            'expires_at' => $expires->toISOString(), 'verification_delivery' => $delivery],
+            $delivery['email'] || $delivery['telegram'] ? 200 : 503);
+    }
     private function scopePublicTeamMembers($query)
     {
         if ($this->hasColumn('users', 'is_active')) {
@@ -132,8 +220,8 @@ class PublicBookingController extends Controller
     public function index(Request $request)
     {
         $data = $request->validate([
-            'type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare'],
-            'vertical' => ['nullable', 'in:services,healthcare'],
+            'type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare,rentals'],
+            'vertical' => ['nullable', 'in:services,healthcare,rentals'],
             'category' => ['nullable', 'string', 'max:120'],
             'category_id' => ['nullable', 'integer'],
             'search' => ['nullable', 'string', 'max:120'],
@@ -296,8 +384,8 @@ class PublicBookingController extends Controller
     public function map(Request $request)
     {
         $data = $request->validate([
-            'type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare'],
-            'vertical' => ['nullable', 'in:services,healthcare'],
+            'type' => ['nullable', 'in:beauty,dental,salon,clinic,services,healthcare,rentals'],
+            'vertical' => ['nullable', 'in:services,healthcare,rentals'],
             'category' => ['nullable', 'string', 'max:120'],
             'category_id' => ['nullable', 'integer'],
             'search' => ['nullable', 'string', 'max:120'],
@@ -448,6 +536,7 @@ class PublicBookingController extends Controller
     {
         $query = $this->publicBusinessQuery($slug)
             ->with(['locations', 'category']);
+        if ($this->hasTable('business_media')) $query->with('gallery');
 
         if ($this->hasTable('business_working_hours')) {
             $query->with(['workingHours' => fn ($hours) => $hours->orderBy('weekday')]);
@@ -495,8 +584,14 @@ class PublicBookingController extends Controller
             'logo_url' => ($business->show_logo ?? true) ? $business->logo_url : null,
             'show_logo' => (bool) ($business->show_logo ?? true),
             'show_cover' => (bool) ($business->show_cover ?? true),
-            'show_staff' => (bool) ($business->show_staff ?? true),
-            'show_services' => (bool) ($business->show_services ?? true),
+            'show_staff' => !$business->isRental() && (bool) ($business->show_staff ?? true),
+            'show_services' => !$business->isRental() && (bool) ($business->show_services ?? true),
+            'gallery' => $business->relationLoaded('gallery') ? $business->gallery : [],
+            'rental' => $business->isRental() ? [
+                'hourly_price' => $business->rental_hourly_price, 'currency' => 'AMD',
+                'min_minutes' => $business->rental_min_minutes, 'max_minutes' => $business->rental_max_minutes,
+                'buffer_minutes' => $business->rental_buffer_minutes, 'slot_step_minutes' => (int) $business->slot_step_minutes,
+            ] : null,
             'instagram_url' => $business->instagram_url,
             'facebook_url' => $business->facebook_url,
             'website_url' => $business->website_url,
@@ -513,6 +608,7 @@ class PublicBookingController extends Controller
     public function services(string $slug, Request $request)
     {
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
+        if ($business->isRental()) return response()->json(['data' => []]);
 
         $services = Service::query()
             ->where('business_id', $business->id)
@@ -530,6 +626,7 @@ class PublicBookingController extends Controller
     public function staff(string $slug, Request $request)
     {
         $business = $this->publicBusinessQuery($slug)->firstOrFail();
+        if ($business->isRental()) return response()->json(['data' => []]);
         $bookableOnly = $request->boolean('bookable_only');
 
         $staff = User::query()
@@ -1316,6 +1413,13 @@ class PublicBookingController extends Controller
      */
     public function store(string $slug, Request $request, AvailabilityService $availability)
     {
+        $request->validate([
+            'legal_accepted' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', Rule::in([(string) config('legal.terms_version')])],
+            'privacy_version' => ['required', 'string', Rule::in([(string) config('legal.privacy_version')])],
+        ]);
+        $rentalBusiness = $this->publicBusinessQuery($slug)->firstOrFail();
+        if ($rentalBusiness->isRental()) return $this->storeRental($rentalBusiness, $request);
         $data = $request->validate([
             'service_id'    => ['required', 'integer', 'exists:services,id'],
             'staff_id'      => ['nullable', 'integer', 'exists:users,id'],
@@ -1751,6 +1855,7 @@ class PublicBookingController extends Controller
         ]);
 
         $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+        if ($booking->business?->isRental()) return $this->verifyRental($booking, $data['otp']);
 
         if ($booking->phone_verified_at) {
             $plainToken = $this->issueGuestAccessForBooking($booking);
@@ -1810,6 +1915,7 @@ class PublicBookingController extends Controller
     public function resendCode(string $code, Request $request)
     {
         $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
+        if ($booking->business?->isRental()) return $this->resendRental($booking);
 
         if ($booking->phone_verified_at) {
             $plainToken = $this->issueGuestAccessForBooking($booking);
@@ -1926,6 +2032,11 @@ class PublicBookingController extends Controller
         }
 
         $target->loadMissing(['business', 'service', 'staff', 'items.service']);
+        if ($target->business->isRental()) {
+            $minutes = (int) $target->starts_at->diffInMinutes($target->ends_at);
+            $slots = app(RentalBookingService::class)->slots($target->business, $data['date'], $minutes, $target->id);
+            return response()->json(['data' => $slots, 'meta' => ['booking_id' => $target->id, 'timezone' => $target->business->effectiveTimezone()]]);
+        }
         $serviceIds = $this->managedBookingServiceIds($target);
         if (!$serviceIds) {
             return response()->json(['message' => 'The booking services are unavailable.'], 422);
@@ -1988,7 +2099,7 @@ class PublicBookingController extends Controller
     {
         $data = $request->validate([
             'booking_id' => ['nullable', 'integer'],
-            'staff_id' => ['required', 'integer'],
+            'staff_id' => ['nullable', 'integer'],
             'starts_at' => ['required', 'date_format:Y-m-d H:i'],
         ]);
 
@@ -2007,6 +2118,14 @@ class PublicBookingController extends Controller
         $target->loadMissing(['business', 'service', 'staff', 'items.service']);
         $business = $target->business;
         abort_unless($business, 404);
+
+        if ($business->isRental()) {
+            $oldStart = $target->starts_at->copy();
+            $oldEnd = $target->ends_at->copy();
+            $moved = app(RentalBookingService::class)->move($business, $target, $data['starts_at']);
+            $this->sendBookingRescheduledNotifications($booking, $moved, $oldStart, $oldEnd, null, $token);
+            return response()->json(['data' => $this->publicBookingPayload($booking->fresh())]);
+        }
 
         $staff = User::query()
             ->whereKey((int) $data['staff_id'])
@@ -2805,7 +2924,7 @@ class PublicBookingController extends Controller
             return $names->implode(', ');
         }
 
-        return $booking->service?->name ?? 'Ծառայություն';
+        return $booking->service?->name ?? ($booking->business?->isRental() ? $booking->business->name : 'Ծառայություն');
     }
 
     private function bookingDateLabel(Booking $booking): string
@@ -2847,7 +2966,7 @@ class PublicBookingController extends Controller
             ($booking->business?->name ?? 'Vizit') . ' • ամրագրման հաստատում',
             'Կոդ՝ ' . $code,
             'Վավեր է մինչև ' . $expires->copy()->timezone($tz)->format('H:i') . '։',
-            'Ծառայություն՝ ' . $this->bookingServicesLabel($booking),
+            ($booking->business?->isRental() ? 'Տարածք՝ ' : 'Ծառայություն՝ ') . $this->bookingServicesLabel($booking),
             'Ժամ՝ ' . $this->bookingDateLabel($booking),
             'Էջ՝ ' . $bookingPageUrl,
         ]);
@@ -2858,7 +2977,7 @@ class PublicBookingController extends Controller
         return implode("
 ", [
             ($booking->business?->name ?? 'Vizit') . ' • ամրագրումը հաստատված է',
-            'Ծառայություն՝ ' . $this->bookingServicesLabel($booking),
+            ($booking->business?->isRental() ? 'Տարածք՝ ' : 'Ծառայություն՝ ') . $this->bookingServicesLabel($booking),
             'Ժամ՝ ' . $this->bookingDateLabel($booking),
             'Կառավարել ամրագրումը՝ ' . $manageUrl,
         ]);
@@ -2869,7 +2988,7 @@ class PublicBookingController extends Controller
         return implode("
 ", [
             ($booking->business?->name ?? 'Vizit') . ' • ամրագրումը չեղարկվել է',
-            'Ծառայություն՝ ' . $this->bookingServicesLabel($booking),
+            ($booking->business?->isRental() ? 'Տարածք՝ ' : 'Ծառայություն՝ ') . $this->bookingServicesLabel($booking),
             'Ժամ՝ ' . $this->bookingDateLabel($booking),
         ]);
     }
@@ -3169,6 +3288,7 @@ class PublicBookingController extends Controller
             'website_url' => $this->getBusinessField($business, 'website_url', null),
             'messenger_url' => $this->getBusinessField($business, 'messenger_url', null),
             'whatsapp_url' => $this->getBusinessField($business, 'whatsapp_url', null),
+            'rental_hourly_price' => $business->isRental() ? $business->rental_hourly_price : null,
             'services_count' => (int) ($business->services_count ?? 0),
             'staff_count' => (int) ($business->staff_count ?? 0),
             'is_featured' => (bool) (
