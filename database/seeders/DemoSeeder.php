@@ -42,6 +42,8 @@ class DemoSeeder extends Seeder
                 'slot_step_minutes' => 15,
                 'timezone' => 'Asia/Yerevan',
                 'is_onboarding_completed' => true,
+                'is_public_profile_enabled' => true,
+                'is_marketplace_visible' => true,
             ]
         );
 
@@ -62,6 +64,8 @@ class DemoSeeder extends Seeder
                 'slot_step_minutes' => 15,
                 'timezone' => 'Asia/Yerevan',
                 'is_onboarding_completed' => true,
+                'is_public_profile_enabled' => true,
+                'is_marketplace_visible' => true,
             ]
         );
 
@@ -82,6 +86,8 @@ class DemoSeeder extends Seeder
                 'slot_step_minutes' => 30,
                 'timezone' => 'Asia/Yerevan',
                 'is_onboarding_completed' => true,
+                'is_public_profile_enabled' => true,
+                'is_marketplace_visible' => true,
             ]
         );
 
@@ -102,6 +108,8 @@ class DemoSeeder extends Seeder
                 'slot_step_minutes' => 30,
                 'timezone' => 'Asia/Yerevan',
                 'is_onboarding_completed' => true,
+                'is_public_profile_enabled' => true,
+                'is_marketplace_visible' => true,
             ]
         );
 
@@ -239,6 +247,8 @@ class DemoSeeder extends Seeder
                 'business_id' => $business->id,
                 'location_id' => $this->primaryLocationId($business),
                 'is_active' => true,
+                'show_in_public_team' => true,
+                'is_bookable' => true,
             ]
         );
 
@@ -252,6 +262,8 @@ class DemoSeeder extends Seeder
                 'business_id' => $business->id,
                 'location_id' => $this->primaryLocationId($business),
                 'is_active' => true,
+                'show_in_public_team' => true,
+                'is_bookable' => true,
             ]
         );
 
@@ -265,6 +277,8 @@ class DemoSeeder extends Seeder
                 'business_id' => $business->id,
                 'location_id' => $this->primaryLocationId($business),
                 'is_active' => true,
+                'show_in_public_team' => true,
+                'is_bookable' => true,
             ]
         );
     }
