@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\ClientAccount;
+use App\Services\GuestBookingAccessService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class ClientCabinetController extends Controller
 {
@@ -15,31 +18,14 @@ class ClientCabinetController extends Controller
         $account = $request->user();
         abort_unless($account instanceof ClientAccount, 401);
 
-        $verifiedEmail = $account->hasVerifiedEmail()
-            ? mb_strtolower(trim((string) $account->email))
-            : null;
+        $linkedClientIds = $this->linkedClientIds($account);
 
-        $linkedClientIds = $verifiedEmail
-            ? $account->clientProfiles()
-                ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail])
-                ->pluck('clients.id')
-            : collect();
-
-        $bookings = Booking::query()
+        $bookings = $this->ownedBookings($account, $linkedClientIds)
             ->with([
                 'business:id,name,slug,logo_url,address,business_type',
                 'service:id,name,duration_minutes,price,currency',
                 'staff:id,name,avatar_url',
             ])
-            ->whereIn('bookings.client_id', $linkedClientIds)
-            ->whereExists(function ($query) use ($account, $verifiedEmail) {
-                $query->selectRaw('1')
-                    ->from('clients')
-                    ->whereColumn('clients.id', 'bookings.client_id')
-                    ->whereColumn('clients.business_id', 'bookings.business_id')
-                    ->where('clients.client_account_id', $account->id)
-                    ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail]);
-            })
             ->orderByDesc('starts_at')
             ->get();
 
@@ -85,5 +71,65 @@ class ClientCabinetController extends Controller
                 'requires_email_verification' => !$account->hasVerifiedEmail(),
             ],
         ]);
+    }
+
+    /**
+     * Issue a guest manage token for a booking the signed-in client owns.
+     * This replaces recovering access through the public resend endpoint,
+     * which must not hand out tokens to anyone who knows the booking code.
+     */
+    public function access(Request $request, int $booking, GuestBookingAccessService $access)
+    {
+        /** @var ClientAccount $account */
+        $account = $request->user();
+        abort_unless($account instanceof ClientAccount, 401);
+
+        $owned = $this->ownedBookings($account, $this->linkedClientIds($account))
+            ->whereKey($booking)
+            ->first();
+
+        abort_unless($owned, 404);
+        abort_unless($owned->phone_verified_at, 422, 'Booking is not verified yet.');
+
+        return response()->json([
+            'data' => [
+                'booking_code' => $owned->booking_code,
+                'manage_token' => $access->issue($owned),
+            ],
+        ]);
+    }
+
+    private function linkedClientIds(ClientAccount $account): Collection
+    {
+        $verifiedEmail = $this->verifiedEmail($account);
+
+        return $verifiedEmail
+            ? $account->clientProfiles()
+                ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail])
+                ->pluck('clients.id')
+            : collect();
+    }
+
+    private function ownedBookings(ClientAccount $account, Collection $linkedClientIds): Builder
+    {
+        $verifiedEmail = $this->verifiedEmail($account);
+
+        return Booking::query()
+            ->whereIn('bookings.client_id', $linkedClientIds)
+            ->whereExists(function ($query) use ($account, $verifiedEmail) {
+                $query->selectRaw('1')
+                    ->from('clients')
+                    ->whereColumn('clients.id', 'bookings.client_id')
+                    ->whereColumn('clients.business_id', 'bookings.business_id')
+                    ->where('clients.client_account_id', $account->id)
+                    ->whereRaw('LOWER(clients.email) = ?', [$verifiedEmail]);
+            });
+    }
+
+    private function verifiedEmail(ClientAccount $account): ?string
+    {
+        return $account->hasVerifiedEmail()
+            ? mb_strtolower(trim((string) $account->email))
+            : null;
     }
 }
