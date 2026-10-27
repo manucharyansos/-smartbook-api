@@ -23,6 +23,6 @@
         <strong>{{ config('app.support_whatsapp', '+37498408879') }}</strong>
     </p>
 
-    <p style="color:#666; font-size:12px; margin-top:18px;">Vizit</p>
+    <p style="color:#55635F; font-size:12px; margin-top:18px;">Vizit</p>
 </body>
 </html>
