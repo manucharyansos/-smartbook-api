@@ -18,6 +18,7 @@ use App\Services\TelegramLinkService;
 use App\Services\TelegramService;
 use App\Services\ClientIdentityLinker;
 use App\Services\GiftCardService;
+use App\Services\GuestBookingAccessService;
 use App\Services\LoyaltyService;
 use App\Services\WaitlistService;
 use Illuminate\Support\Facades\Mail;
@@ -1858,17 +1859,8 @@ class PublicBookingController extends Controller
         $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
         if ($booking->business?->isRental()) return $this->verifyRental($booking, $data['otp']);
 
-        if ($booking->phone_verified_at) {
-            $plainToken = $this->issueGuestAccessForBooking($booking);
-            return response()->json([
-                'ok' => true,
-                'already' => true,
-                'manage_token' => $plainToken,
-                'manage_url' => $this->frontendManageUrl($booking, $plainToken),
-                'data' => $this->publicBookingPayload($booking),
-            ]);
-        }
-
+        // An already verified booking needs a fresh OTP (sent by resendCode) before a
+        // new guest token is issued. The booking code alone must never grant access.
         if (!$booking->phone_verification_expires_at || now()->greaterThan($booking->phone_verification_expires_at)) {
             return response()->json(['message' => 'Code expired. Please request a new code.'], 422);
         }
@@ -1881,6 +1873,26 @@ class PublicBookingController extends Controller
 
         if (!Hash::check($data['otp'], (string)$booking->phone_verification_code_hash)) {
             return response()->json(['message' => 'Invalid code'], 422);
+        }
+
+        if ($booking->phone_verified_at) {
+            // Access recovery: the OTP proved control, so only reissue the token.
+            // Status and notifications stay as they are.
+            app(GuestBookingAccessService::class)->groupQuery($booking)->update([
+                'phone_verification_code_hash' => null,
+                'phone_verification_expires_at' => null,
+                'phone_verification_attempts' => 0,
+            ]);
+            $booking->refresh();
+            $plainToken = $this->issueGuestAccessForBooking($booking);
+
+            return response()->json([
+                'ok' => true,
+                'already' => true,
+                'manage_token' => $plainToken,
+                'manage_url' => $this->frontendManageUrl($booking, $plainToken),
+                'data' => $this->publicBookingPayload($booking),
+            ]);
         }
 
         $now = now();
@@ -1918,17 +1930,8 @@ class PublicBookingController extends Controller
         $booking = Booking::query()->where('booking_code', $code)->firstOrFail();
         if ($booking->business?->isRental()) return $this->resendRental($booking);
 
-        if ($booking->phone_verified_at) {
-            $plainToken = $this->issueGuestAccessForBooking($booking);
-            return response()->json([
-                'ok' => true,
-                'already' => true,
-                'manage_token' => $plainToken,
-                'manage_url' => $this->frontendManageUrl($booking, $plainToken),
-                'data' => $this->publicBookingPayload($booking),
-            ]);
-        }
-
+        // Verified bookings also get a new OTP here (access recovery). The token is
+        // issued only by verifyPhone after the customer enters that code.
         $codeValue = (string) random_int(1000, 9999);
         $expires = now()->addMinutes(10);
 
@@ -2297,22 +2300,7 @@ class PublicBookingController extends Controller
 
     private function issueGuestAccessForBooking(Booking $booking): string
     {
-        $plainToken = Str::random(40);
-        $expires = now()->addDays(7);
-
-        $query = Booking::query()->where('client_id', $booking->client_id);
-        if ($booking->group_id) {
-            $query->where('group_id', $booking->group_id);
-        } else {
-            $query->where('id', $booking->id);
-        }
-
-        $query->update([
-            'guest_access_token_hash' => Hash::make($plainToken),
-            'guest_access_expires_at' => $expires,
-        ]);
-
-        return $plainToken;
+        return app(GuestBookingAccessService::class)->issue($booking);
     }
 
     private function assertGuestAccess(Booking $booking, string $token): void

@@ -227,6 +227,9 @@ Route::prefix('client/auth')->group(function () {
 
 Route::prefix('client')->middleware('auth:sanctum')->group(function () {
     Route::get('cabinet/bookings', [ClientCabinetController::class, 'bookings']);
+    Route::post('cabinet/bookings/{booking}/access', [ClientCabinetController::class, 'access'])
+        ->whereNumber('booking')
+        ->middleware('throttle:30,1');
 });
 
 /*
