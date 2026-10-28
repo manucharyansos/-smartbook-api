@@ -6,6 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 
 class PaymentTransaction extends Model
 {
+    protected $appends = ['requires_manual_review'];
+
+    public function getRequiresManualReviewAttribute(): bool
+    {
+        return (bool) ($this->provider_payload['requires_manual_review'] ?? false);
+    }
+
     protected $fillable = [
         'business_id',
         'invoice_id',

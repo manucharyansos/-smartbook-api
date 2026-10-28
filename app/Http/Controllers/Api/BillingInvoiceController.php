@@ -10,6 +10,7 @@ use App\Models\Subscription;
 use App\Models\User;
 use App\Services\Billing\BillingLifecycleService;
 use App\Services\Billing\BusinessPricingResolver;
+use App\Services\Billing\BillingPaymentProviders;
 use Illuminate\Http\Request;
 
 class BillingInvoiceController extends Controller
@@ -43,7 +44,7 @@ class BillingInvoiceController extends Controller
 
         $data = $request->validate([
             'plan_code' => ['required','string','exists:plans,code'],
-            'payment_method' => ['nullable','string','in:card'],
+            'payment_method' => ['nullable','string','in:card,wallet'],
             'billing_cycle' => ['nullable','string','in:monthly,yearly'],
             'note' => ['nullable','string','max:255'],
         ]);
@@ -223,11 +224,11 @@ class BillingInvoiceController extends Controller
             'mode' => 'invoice',
             'data' => $invoice->load('plan:id,name,code,price,monthly_price,yearly_price,currency,seats,staff_limit'),
             'payment' => [
-                'method' => 'idbank_hosted_checkout',
+                'method' => $provider['default'].'_hosted_checkout',
                 'checkout_available' => $provider['checkout_available'],
                 'message' => $provider['checkout_available']
-                    ? 'Վճարումը կատարվում է IDBank-ի պաշտպանված էջում։'
-                    : 'IDBank-ի պաշտոնական merchant կապը դեռ ակտիվ չէ․ այս հաշիվը հիմա օնլայն վճարման ենթակա չէ։',
+                    ? 'Վճարումը կատարվում է '.$provider['display_name'].'-ի պաշտպանված էջում։'
+                    : 'Վճարային կապը դեռ ակտիվ չէ․ այս հաշիվը հիմա օնլայն վճարման ենթակա չէ։',
                 'billing_cycle' => $billingCycle,
                 'amount_summary' => [
                     'base_monthly_amount' => $monthlyPrice,
@@ -246,35 +247,7 @@ class BillingInvoiceController extends Controller
 
     private function paymentProviderStatus(): array
     {
-        $defaultProvider = (string) config('billing.providers.default', 'idbank');
-        $mode = (string) config('billing.providers.mode', 'live');
-        $idBank = (array) config('billing.providers.idbank', []);
-        $isNonProduction = app()->environment(['local', 'testing']);
-        $mockReady = $defaultProvider === 'idbank_mock'
-            && $mode === 'mock'
-            && $isNonProduction
-            && (bool) config('billing.allow_mock_payments', false);
-        $requiredLiveValues = [
-            $idBank['merchant_id'] ?? null,
-            $idBank['terminal_id'] ?? null,
-            $idBank['secret'] ?? null,
-            $idBank['webhook_secret'] ?? null,
-        ];
-        $liveReady = $defaultProvider === 'idbank'
-            && $mode === 'live'
-            && (bool) ($idBank['live_enabled'] ?? false)
-            && (bool) ($idBank['contract_mapping_ready'] ?? false)
-            && collect($requiredLiveValues)->every(
-                fn ($value) => filled($value) && $value !== 'CHANGE_ME'
-            );
-
-        return [
-            'default' => $mockReady ? 'idbank_mock' : 'idbank',
-            'mode' => $mockReady ? 'mock' : 'live',
-            'checkout_required' => true,
-            'checkout_available' => $mockReady || $liveReady,
-            'connection_status' => $mockReady || $liveReady ? 'connected' : 'awaiting_official_connection',
-        ];
+        return BillingPaymentProviders::status();
     }
 
     public function cancel(Request $request, Invoice $invoice)

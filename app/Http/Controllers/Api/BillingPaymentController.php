@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\PaymentTransaction;
 use App\Services\Billing\HostedCheckoutUrlBuilder;
+use App\Services\Billing\BillingPaymentProviders;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -28,14 +29,15 @@ class BillingPaymentController extends Controller
 
         $data = $request->validate([
             'invoice_id' => ['nullable', 'integer', 'exists:invoices,id'],
-            'provider' => ['nullable', 'string', 'in:idbank,idbank_mock'],
-            'payment_method' => ['nullable', 'string', 'in:card'],
+            'provider' => ['nullable', 'string', 'in:idbank,idbank_mock,idram'],
+            'payment_method' => ['nullable', 'string', 'in:card,wallet'],
         ]);
 
         $provider = (string) config('billing.providers.default', 'idbank_mock');
-        $method = $data['payment_method'] ?? 'card';
+        $method = $data['payment_method'] ?? ($provider === 'idram' ? 'wallet' : 'card');
+        abort_unless($method === ($provider === 'idram' ? 'wallet' : 'card'), 422, 'Payment method is unavailable.');
 
-        if (!in_array($provider, ['idbank', 'idbank_mock'], true)) {
+        if (!in_array($provider, ['idbank', 'idbank_mock', 'idram'], true)) {
             return response()->json([
                 'message' => 'Վճարման provider-ը սխալ է կարգավորված։',
                 'code' => 'payment_provider_misconfigured',
@@ -56,9 +58,9 @@ class BillingPaymentController extends Controller
             ], 503);
         }
 
-        if ($provider === 'idbank' && !$this->idbankIsReady()) {
+        if (in_array($provider, ['idbank', 'idram'], true) && !BillingPaymentProviders::status()['live_ready']) {
             return response()->json([
-                'message' => 'IDBank live վճարումը դեռ միացված չէ։',
+                'message' => 'Վճարային համակարգի իրական կապը դեռ միացված չէ։',
                 'code' => 'live_payments_disabled',
             ], 503);
         }
@@ -80,6 +82,11 @@ class BillingPaymentController extends Controller
             ], 409);
         }
 
+        if ($provider === 'idram') {
+            abort_unless((int) $invoice->amount > 0 && $invoice->currency === 'AMD', 422, 'Idram requires a positive AMD invoice.');
+        }
+        app()->setLocale($request->getPreferredLanguage(['hy', 'ru', 'en']) ?? 'hy');
+
         $transaction = PaymentTransaction::query()
             ->where('business_id', $invoice->business_id)
             ->where('invoice_id', $invoice->id)
@@ -90,7 +97,7 @@ class BillingPaymentController extends Controller
             ->first();
 
         if ($transaction) {
-            if (!$transaction->checkout_url) {
+            if (!$transaction->checkout_url || $provider === 'idram') {
                 $checkout = $this->checkoutBuilder->build($transaction, $invoice);
                 $transaction->update([
                     'checkout_url' => $checkout['checkout_url'],
@@ -133,30 +140,14 @@ class BillingPaymentController extends Controller
             'data' => $transaction,
             'provider' => [
                 'name' => $provider,
-                'mode' => $provider === 'idbank' ? 'live' : 'mock',
-                'live_ready' => $provider === 'idbank',
-                'message' => $provider === 'idbank'
-                    ? 'IDBank hosted checkout is ready; final status is accepted only through the verified return and webhook flow.'
+                'mode' => $provider === 'idbank_mock' ? 'mock' : 'live',
+                'live_ready' => $provider !== 'idbank_mock',
+                'display_name' => $provider === 'idram' ? 'Idram' : 'IDBank',
+                'message' => $provider !== 'idbank_mock'
+                    ? 'Payment is confirmed only by the verified server callback.'
                     : 'Local test checkout is ready; it is never available in production.',
             ],
         ], $status);
-    }
-
-    private function idbankIsReady(): bool
-    {
-        if (!config('billing.providers.idbank.live_enabled', false)
-            || !config('billing.providers.idbank.contract_mapping_ready', false)) {
-            return false;
-        }
-
-        foreach (['merchant_id', 'terminal_id', 'secret', 'webhook_secret'] as $key) {
-            $value = config("billing.providers.idbank.{$key}");
-            if (!filled($value) || $value === 'CHANGE_ME') {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private function mockPaymentsAreAllowed(): bool
