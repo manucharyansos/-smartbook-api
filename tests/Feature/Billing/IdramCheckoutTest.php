@@ -225,3 +225,12 @@ it('accepts the signed checkout link when TLS ends at a proxy in front of PHP', 
     $path = substr($c['transaction']->checkout_url, strlen('https://api.vizit.am'));
     $this->get('http://api.vizit.am'.$path)->assertOk();
 });
+
+it('does not let the Apache config add a second policy that blocks the Idram checkout form', function () {
+    $htaccess = file_get_contents(public_path('.htaccess'));
+    preg_match_all('/^\s*Header\s+always\s+set\s+Content-Security-Policy\s.*$/mi', $htaccess, $lines);
+    expect($lines[0])->not->toBeEmpty();
+    foreach ($lines[0] as $line) {
+        expect($line)->toContain('/api/payments/idram/checkout/');
+    }
+});

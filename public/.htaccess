@@ -37,5 +37,7 @@
     Header always set X-Frame-Options "DENY"
     Header always set Referrer-Policy "no-referrer"
     Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
-    Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    # The Idram checkout page sets its own nonce-based policy in Laravel that
+    # allows posting to Idram. A second, stricter policy here would block it.
+    Header always set Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" "expr=%{THE_REQUEST} !~ m#^[A-Z]+ /api/payments/idram/checkout/#"
 </IfModule>
