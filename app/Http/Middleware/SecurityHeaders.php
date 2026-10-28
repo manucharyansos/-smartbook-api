@@ -23,7 +23,7 @@ class SecurityHeaders
         if ($request->routeIs('payments.idram.checkout') && $response->getStatusCode() === 200
             && is_string($nonce) && preg_match('/^[A-Za-z0-9+\/]{24}$/D', $nonce)) {
             $policy = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
-                ."form-action https://banking.idram.am; script-src 'nonce-{$nonce}'; style-src 'nonce-{$nonce}'";
+                ."form-action https://banking.idram.am https://*.idram.am; script-src 'nonce-{$nonce}'; style-src 'nonce-{$nonce}'";
         }
         $response->headers->set('Content-Security-Policy', $policy);
         $response->headers->set('X-Robots-Tag', 'noindex, nofollow');

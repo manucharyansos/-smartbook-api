@@ -205,3 +205,23 @@ it('continues accepting a verified pending receipt after new checkouts are disab
     $this->post('/api/payments/idram/result', idramReceipt($c))->assertOk()->assertContent('OK');
     expect($c['invoice']->fresh()->status)->toBe('approved');
 });
+
+it('returns a payer who started checkout in the mobile app to the app without confirming payment', function () {
+    $c = idramCheckoutContext();
+    $this->postJson('/api/billing/checkout-session', ['invoice_id' => $c['invoice']->id, 'payment_method' => 'wallet', 'return_to' => 'app'])
+        ->assertOk()->assertJsonPath('data.id', $c['transaction']->id);
+    $r = $this->get('/api/payments/idram/success?EDP_BILL_NO='.$c['transaction']->provider_transaction_id)->assertStatus(303);
+    expect($r->headers->get('Location'))->toStartWith('vizit://billing?provider=idram&return=success');
+    expect($c['invoice']->fresh()->status)->toBe('pending');
+    $this->postJson('/api/billing/checkout-session', ['invoice_id' => $c['invoice']->id, 'payment_method' => 'wallet'])->assertOk();
+    $r = $this->get('/api/payments/idram/fail?EDP_BILL_NO='.$c['transaction']->provider_transaction_id)->assertStatus(303);
+    expect($r->headers->get('Location'))->toStartWith('https://vizit.am/payment-return?provider=idram&return=fail');
+});
+
+it('accepts the signed checkout link when TLS ends at a proxy in front of PHP', function () {
+    config()->set('app.url', 'https://api.vizit.am');
+    $c = idramCheckoutContext();
+    expect($c['transaction']->checkout_url)->toStartWith('https://api.vizit.am/api/payments/idram/checkout/');
+    $path = substr($c['transaction']->checkout_url, strlen('https://api.vizit.am'));
+    $this->get('http://api.vizit.am'.$path)->assertOk();
+});

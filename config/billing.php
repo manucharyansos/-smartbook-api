@@ -7,6 +7,9 @@ return [
 
     'frontend_base_url' => rtrim(env('FRONTEND_APP_URL', env('APP_FRONTEND_URL', env('APP_URL', 'http://localhost'))), '/'),
 
+    // Where Idram's success/fail return sends a payer who started checkout in the mobile app.
+    'mobile_return_url' => env('BILLING_MOBILE_RETURN_URL', 'vizit://billing'),
+
     'allow_mock_payments' => filter_var(
         env('BILLING_ALLOW_MOCK_PAYMENTS', $isNonProduction),
         FILTER_VALIDATE_BOOL

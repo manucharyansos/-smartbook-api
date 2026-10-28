@@ -36,9 +36,11 @@ final class IdramGateway
         $this->assertPayable($transaction, $invoice);
 
         return [
-            'checkout_url' => URL::temporarySignedRoute('payments.idram.checkout',
+            // The signature covers only the path and query, so a TLS-terminating
+            // proxy (https outside, http to PHP) cannot invalidate the link.
+            'checkout_url' => rtrim((string) config('app.url'), '/').URL::temporarySignedRoute('payments.idram.checkout',
                 now()->addMinutes(max(5, min(60, (int) config('billing.providers.idram.checkout_minutes', 30)))),
-                ['transaction' => $transaction->id, 'locale' => app()->getLocale()]),
+                ['transaction' => $transaction->id, 'locale' => app()->getLocale()], false),
             // The merchant secret is used only when checking server callbacks.
             'payload' => ['provider' => 'idram', 'mode' => 'live', 'payment_page_mode' => 'hosted_redirect'],
         ];

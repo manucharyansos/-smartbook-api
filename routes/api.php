@@ -170,7 +170,7 @@ Route::get('/plans', [PublicPlanController::class, 'index']);
 Route::post('/webhooks/payments/idbank', [BillingWebhookController::class, 'idbank']);
 Route::post('/webhooks/payments/idbank/mock-complete', [BillingWebhookController::class, 'hostedMockComplete']);
 Route::get('/payments/idram/checkout/{transaction}', [\App\Http\Controllers\Api\IdramPaymentController::class, 'checkout'])
-    ->whereNumber('transaction')->middleware(['signed', 'throttle:30,1'])->name('payments.idram.checkout');
+    ->whereNumber('transaction')->middleware(['signed:relative', 'throttle:30,1'])->name('payments.idram.checkout');
 Route::post('/payments/idram/result', [\App\Http\Controllers\Api\IdramPaymentController::class, 'result'])->middleware('throttle:120,1');
 Route::get('/payments/idram/result', [\App\Http\Controllers\Api\IdramPaymentController::class, 'information'])->middleware('throttle:60,1');
 Route::match(['get', 'post'], '/payments/idram/success', [\App\Http\Controllers\Api\IdramPaymentController::class, 'success'])->middleware('throttle:60,1');

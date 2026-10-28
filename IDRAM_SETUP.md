@@ -43,6 +43,8 @@ IDRAM_REC_ACCOUNT=
 IDRAM_SECRET_KEY=
 IDRAM_EMAIL=info@vizit.am
 IDRAM_CHECKOUT_MINUTES=30
+# Optional: where a checkout started in the mobile app returns (default vizit://billing)
+BILLING_MOBILE_RETURN_URL=vizit://billing
 ```
 
 Fill `IDRAM_REC_ACCOUNT` and `IDRAM_SECRET_KEY` with the bank-issued test merchant values, then set `IDRAM_LIVE_ENABLED=true` and clear Laravel's configuration cache. The flag enables the external Idram connection; Idram determines test versus production processing from the merchant account. Replace credentials with the contracted business merchant only when production activation is approved. Keep secrets on the server; no secret is included in the browser form, API response or Git.

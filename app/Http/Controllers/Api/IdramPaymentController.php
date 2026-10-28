@@ -84,8 +84,14 @@ final class IdramPaymentController extends Controller
             $query['status'] = 'cancelled';
         }
 
+        // A checkout started in the mobile app returns to the app, which then
+        // reads the verified status from the API like the web return page does.
+        $base = ($transaction?->checkout_payload['return_to'] ?? null) === 'app'
+            ? (string) config('billing.mobile_return_url')
+            : rtrim((string) config('billing.frontend_base_url'), '/').'/payment-return';
+
         // Browser return data never changes a payment or subscription state.
-        return redirect()->away(rtrim((string) config('billing.frontend_base_url'), '/').'/payment-return?'.http_build_query($query), 303)
+        return redirect()->away($base.'?'.http_build_query($query), 303)
             ->withHeaders(['Cache-Control' => 'no-store, private', 'Pragma' => 'no-cache']);
     }
 }

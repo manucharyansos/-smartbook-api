@@ -31,7 +31,9 @@ class BillingPaymentController extends Controller
             'invoice_id' => ['nullable', 'integer', 'exists:invoices,id'],
             'provider' => ['nullable', 'string', 'in:idbank,idbank_mock,idram'],
             'payment_method' => ['nullable', 'string', 'in:card,wallet'],
+            'return_to' => ['nullable', 'string', 'in:web,app'],
         ]);
+        $returnTo = ($data['return_to'] ?? 'web') === 'app' ? 'app' : 'web';
 
         $provider = (string) config('billing.providers.default', 'idbank_mock');
         $method = $data['payment_method'] ?? ($provider === 'idram' ? 'wallet' : 'card');
@@ -101,7 +103,7 @@ class BillingPaymentController extends Controller
                 $checkout = $this->checkoutBuilder->build($transaction, $invoice);
                 $transaction->update([
                     'checkout_url' => $checkout['checkout_url'],
-                    'checkout_payload' => $checkout['payload'],
+                    'checkout_payload' => $checkout['payload'] + ['return_to' => $returnTo],
                 ]);
             }
 
@@ -125,7 +127,7 @@ class BillingPaymentController extends Controller
 
         $transaction->update([
             'checkout_url' => $checkout['checkout_url'],
-            'checkout_payload' => $checkout['payload'],
+            'checkout_payload' => $checkout['payload'] + ['return_to' => $returnTo],
         ]);
 
         return $this->checkoutResponse($transaction->fresh(), $provider, 201);
