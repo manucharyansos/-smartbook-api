@@ -593,6 +593,7 @@ class PublicBookingController extends Controller
                 'min_minutes' => $business->rental_min_minutes, 'max_minutes' => $business->rental_max_minutes,
                 'buffer_minutes' => $business->rental_buffer_minutes, 'slot_step_minutes' => (int) $business->slot_step_minutes,
                 'allow_overnight' => (bool) $business->rental_allow_overnight,
+                'duration_discounts' => app(RentalBookingService::class)->durationDiscounts($business),
             ] : null,
             'instagram_url' => $business->instagram_url,
             'facebook_url' => $business->facebook_url,

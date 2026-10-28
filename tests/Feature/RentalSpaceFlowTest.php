@@ -354,3 +354,38 @@ it('keeps overnight availability on the selected date and clips occupancy to the
     $this->actingAs($this->owner)->getJson('/api/rental/summary?from=2026-10-28&to=2026-10-28')
         ->assertOk()->assertJsonPath('data.available_minutes', 120)->assertJsonPath('data.occupancy_percent', 50);
 });
+
+it('lets the owner set duration discounts and applies the longest reached tier to quotes and bookings', function ($minutes, $gross, $percent, $price) {
+    $this->rental->update(['rental_max_minutes' => 600]);
+    $this->rental->workingHours()->where('weekday', 2)->update(['break_start' => null, 'break_end' => null, 'end' => '22:00']);
+    $settings = ['hourly_price' => 2000, 'min_minutes' => 60, 'max_minutes' => 600, 'buffer_minutes' => 0, 'slot_step_minutes' => 30,
+        'duration_discounts' => [['min_minutes' => 300, 'percent' => 7], ['min_minutes' => 180, 'percent' => 5]]];
+    $this->actingAs($this->owner)->putJson('/api/rental/settings', $settings)->assertOk()
+        ->assertJsonPath('data.duration_discounts', [['min_minutes' => 180, 'percent' => 5], ['min_minutes' => 300, 'percent' => 7]]);
+    $this->getJson('/api/public/businesses/'.$this->rental->slug)->assertOk()
+        ->assertJsonPath('rental.duration_discounts.1', ['min_minutes' => 300, 'percent' => 7]);
+    $slot = collect($this->getJson('/api/public/businesses/'.$this->rental->slug.'/rental-availability?date=2026-10-27&duration_minutes='.$minutes)
+        ->assertOk()->json('data'))->firstWhere('starts_at', '2026-10-27 10:00');
+    expect($slot)->toMatchArray(['gross_price' => $gross, 'discount_percent' => $percent, 'price' => $price]);
+    $this->postJson('/api/rental/bookings', [...$this->rentalData, 'duration_minutes' => $minutes])->assertCreated()
+        ->assertJsonPath('data.final_price', $price);
+    expect(Booking::firstOrFail()->source_meta)->toMatchArray(['gross_amount' => $gross, 'rental_discount_percent' => $percent]);
+})->with([
+    'below the first tier' => [150, 5000, 0, 5000],
+    'exactly three hours' => [180, 6000, 5, 5700],
+    'four hours' => [240, 8000, 5, 7600],
+    'five hours or more' => [330, 11000, 7, 10230],
+]);
+
+it('rejects invalid discount tiers and keeps existing tiers when the field is omitted', function () {
+    $base = ['hourly_price' => 2000, 'min_minutes' => 60, 'max_minutes' => 240, 'buffer_minutes' => 0, 'slot_step_minutes' => 30];
+    $this->actingAs($this->owner)->putJson('/api/rental/settings', [...$base, 'duration_discounts' => [['min_minutes' => 120, 'percent' => 10]]])->assertOk();
+    foreach ([[['min_minutes' => 120, 'percent' => 0]], [['min_minutes' => 120, 'percent' => 91]], [['min_minutes' => 10, 'percent' => 5]],
+        [['min_minutes' => 120, 'percent' => 5], ['min_minutes' => 120, 'percent' => 6]], array_fill(0, 11, ['min_minutes' => 60, 'percent' => 1])] as $tiers) {
+        $this->putJson('/api/rental/settings', [...$base, 'duration_discounts' => $tiers])->assertUnprocessable();
+    }
+    $this->putJson('/api/rental/settings', $base)->assertOk()->assertJsonPath('data.duration_discounts', [['min_minutes' => 120, 'percent' => 10]]);
+    $this->putJson('/api/rental/settings', [...$base, 'duration_discounts' => []])->assertOk()->assertJsonPath('data.duration_discounts', []);
+    $this->actingAs(User::factory()->create(['business_id' => $this->rental->id, 'role' => 'staff']))
+        ->putJson('/api/rental/settings', [...$base, 'duration_discounts' => [['min_minutes' => 60, 'percent' => 90]]])->assertForbidden();
+});

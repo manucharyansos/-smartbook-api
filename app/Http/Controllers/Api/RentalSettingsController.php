@@ -48,6 +48,7 @@ class RentalSettingsController extends Controller
             'allow_overnight' => (bool) $business->rental_allow_overnight,
             'timezone' => $business->effectiveTimezone(),
             'slot_step_minutes' => (int) $business->slot_step_minutes,
+            'duration_discounts' => app(RentalBookingService::class)->durationDiscounts($business),
             'gallery' => $business->gallery()->get(),
         ]]);
     }
@@ -62,6 +63,9 @@ class RentalSettingsController extends Controller
             'allow_overnight' => ['sometimes', 'boolean'],
             'buffer_minutes' => ['required', 'integer', 'min:0', 'max:240'],
             'slot_step_minutes' => ['required', 'integer', 'in:5,10,15,20,30,60'],
+            'duration_discounts' => ['sometimes', 'array', 'max:'.RentalBookingService::MAX_DISCOUNT_TIERS],
+            'duration_discounts.*.min_minutes' => ['required', 'integer', 'min:15', 'max:'.RentalBookingService::MAX_MINUTES, 'distinct'],
+            'duration_discounts.*.percent' => ['required', 'integer', 'min:1', 'max:'.RentalBookingService::MAX_DISCOUNT_PERCENT],
         ]);
         if ($data['min_minutes'] % $data['slot_step_minutes'] || $data['max_minutes'] % $data['slot_step_minutes']) {
             throw ValidationException::withMessages(['min_minutes' => 'Տևողությունները պետք է բաժանվեն ժամային քայլի վրա։']);
@@ -76,6 +80,9 @@ class RentalSettingsController extends Controller
                 'rental_max_minutes' => $data['max_minutes'], 'rental_buffer_minutes' => $data['buffer_minutes'],
                 'slot_step_minutes' => $data['slot_step_minutes'], 'show_services' => false, 'show_staff' => false,
                 'rental_allow_overnight' => $data['allow_overnight'] ?? $business->rental_allow_overnight,
+                ...(array_key_exists('duration_discounts', $data) ? ['rental_duration_discounts' => collect($data['duration_discounts'])
+                    ->map(fn ($tier) => ['min_minutes' => (int) $tier['min_minutes'], 'percent' => (int) $tier['percent']])
+                    ->sortBy('min_minutes')->values()->all()] : []),
             ]);
         });
         $request->user()->unsetRelation('business');

@@ -17,6 +17,10 @@ class RentalBookingService
 
     public const MAX_PRICE = 4294967295;
 
+    public const MAX_DISCOUNT_TIERS = 10;
+
+    public const MAX_DISCOUNT_PERCENT = 90;
+
     public function assertBookable(Business $business): void
     {
         abort_unless($business->isRental(), 404);
@@ -33,14 +37,58 @@ class RentalBookingService
         if ($minutes < $business->rental_min_minutes || $minutes > min(self::MAX_MINUTES, $business->rental_max_minutes) || $minutes % $step !== 0) {
             throw ValidationException::withMessages(['duration_minutes' => 'Ընտրեք թույլատրելի տևողություն։']);
         }
-        if ($this->price($business, $minutes) > self::MAX_PRICE) {
+        if ($this->grossPrice($business, $minutes) > self::MAX_PRICE) {
             throw ValidationException::withMessages(['duration_minutes' => 'Ընտրված տևողության ընդհանուր գինը գերազանցում է թույլատրելի սահմանը։']);
         }
     }
 
-    public function price(Business $business, int $minutes): int
+    public function grossPrice(Business $business, int $minutes): int
     {
         return (int) ceil(((int) $business->rental_hourly_price * $minutes) / 60);
+    }
+
+    /** The price a renter pays, after the owner's duration discount. */
+    public function price(Business $business, int $minutes): int
+    {
+        return $this->quote($business, $minutes)['price'];
+    }
+
+    /** Valid tiers, longest first. Invalid stored rows are ignored, never applied. */
+    public function durationDiscounts(Business $business): array
+    {
+        $tiers = collect(is_array($business->rental_duration_discounts) ? $business->rental_duration_discounts : [])
+            ->filter(fn ($tier) => is_array($tier) && is_numeric($tier['min_minutes'] ?? null) && is_numeric($tier['percent'] ?? null))
+            ->map(fn ($tier) => ['min_minutes' => (int) $tier['min_minutes'], 'percent' => (int) $tier['percent']])
+            ->filter(fn ($tier) => $tier['min_minutes'] > 0 && $tier['percent'] >= 1 && $tier['percent'] <= self::MAX_DISCOUNT_PERCENT)
+            ->unique('min_minutes')
+            ->sortBy('min_minutes')
+            ->values()
+            ->all();
+
+        return array_slice($tiers, 0, self::MAX_DISCOUNT_TIERS);
+    }
+
+    public function discountPercent(Business $business, int $minutes): int
+    {
+        $percent = 0;
+        foreach ($this->durationDiscounts($business) as $tier) {
+            if ($minutes >= $tier['min_minutes']) {
+                $percent = $tier['percent'];
+            }
+        }
+
+        return $percent;
+    }
+
+    /** @return array{gross_price: int, discount_percent: int, discount_amount: int, price: int} */
+    public function quote(Business $business, int $minutes): array
+    {
+        $gross = $this->grossPrice($business, $minutes);
+        $percent = $this->discountPercent($business, $minutes);
+        // Round the discount down so the renter is never charged a fraction more than shown.
+        $discount = (int) floor($gross * $percent / 100);
+
+        return ['gross_price' => $gross, 'discount_percent' => $percent, 'discount_amount' => $discount, 'price' => $gross - $discount];
     }
 
     public function reservations(Business $business)
@@ -98,6 +146,7 @@ class RentalBookingService
         $blocks = BookingBlock::query()->where('business_id', $business->id)->whereNull('staff_id')
             ->where('starts_at', '<', $to)->where('ends_at', '>', $from)->get(['starts_at', 'ends_at']);
         $slots = [];
+        $quote = $this->quote($business, $minutes);
         $windows = $this->scheduleWindows($business, $day, $day->copy()->addDay()->addMinutes($minutes));
         foreach ($windows as $window) {
             $start = $window['start']->copy()->max($day)->seconds(0);
@@ -119,7 +168,7 @@ class RentalBookingService
                 if (! $overlap && ! $blocked) {
                     $slots[$start->format('Y-m-d H:i')] = [
                         'starts_at' => $start->format('Y-m-d H:i'), 'ends_at' => $end->format('Y-m-d H:i'),
-                        'price' => $this->price($business, $minutes), 'currency' => 'AMD',
+                        ...$quote, 'currency' => 'AMD',
                     ];
                 }
             }
@@ -189,6 +238,7 @@ class RentalBookingService
                 throw ValidationException::withMessages(['starts_at' => 'Ամրագրումը հասանելի է մինչև մեկ տարի առաջ։']);
             }
             $this->assertAvailable($business, $start, $end);
+            $quote = $this->quote($business, $minutes);
             $client = Client::query()->firstOrCreate([
                 'business_id' => $business->id, 'phone' => $data['client_phone'],
             ], ['name' => $data['client_name'], 'email' => Booking::normalizeContactEmail($data['client_email'] ?? null)]);
@@ -200,9 +250,11 @@ class RentalBookingService
                 'client_email' => Booking::normalizeContactEmail($data['client_email'] ?? null),
                 'service_id' => null, 'staff_id' => null, 'room_id' => null,
                 'starts_at' => $start, 'ends_at' => $end, 'status' => 'confirmed',
-                'final_price' => $this->price($business, $minutes), 'currency' => 'AMD',
+                'final_price' => $quote['price'], 'currency' => 'AMD',
                 'booking_code' => strtoupper(Str::random(10)), 'notes' => $data['notes'] ?? null,
-                'source' => 'website', 'source_meta' => ['rental_hourly_price' => $business->rental_hourly_price],
+                'source' => 'website', 'source_meta' => ['rental_hourly_price' => $business->rental_hourly_price,
+                    'gross_amount' => $quote['gross_price'], 'rental_discount_percent' => $quote['discount_percent'],
+                    'rental_discount_amount' => $quote['discount_amount']],
                 ...$extra,
             ]);
         }, 3);
