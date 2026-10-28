@@ -35,6 +35,44 @@ beforeEach(function () {
 
 afterEach(fn () => Carbon::setTestNow());
 
+it('offers authenticated rental times for a hidden profile and applies reservation conflicts', function () {
+    $this->rental->update(['is_public' => false, 'is_public_profile_enabled' => false, 'is_marketplace_visible' => false]);
+    $url = '/api/rental/availability?date=2026-10-27&duration_minutes=90';
+    $this->getJson($url)->assertUnauthorized();
+    $this->actingAs($this->owner)->getJson($url)->assertOk()->assertHeader('Cache-Control', 'no-store, private')
+        ->assertJsonPath('timezone', 'Asia/Yerevan');
+    $this->postJson('/api/rental/bookings', $this->rentalData)->assertCreated()->assertJsonPath('data.final_price', 3000);
+    $slots = $this->getJson($url)->assertOk()->json('data');
+    expect(collect($slots)->contains('starts_at', '2026-10-27 10:00'))->toBeFalse();
+    $this->getJson('/api/rental/availability?date=2026-10-27&duration_minutes=16')->assertUnprocessable();
+});
+
+it('scopes rental availability to the authenticated business and rejects staff and non-rentals', function () {
+    $url = '/api/rental/availability?date=2026-10-27&duration_minutes=90';
+    $this->actingAs(User::factory()->create(['business_id' => $this->rental->id, 'role' => 'staff']))->getJson($url)->assertForbidden();
+    $other = Business::factory()->onboardingCompleted()->create(['business_type' => 'services', 'vertical' => 'services']);
+    $sub = new Subscription(['business_id' => $other->id, 'status' => 'active', 'current_period_ends_at' => now()->addMonth()]);
+    $normalPlan = Plan::create(['name' => 'Native regular plan', 'code' => 'native-regular', 'price' => 1000, 'monthly_price' => 1000, 'currency' => 'AMD', 'seats' => 5, 'staff_limit' => 5, 'duration_days' => 30, 'features' => [], 'is_active' => true]);
+    $sub->applyPlanSnapshot($normalPlan);
+    $sub->save();
+    $this->actingAs(User::factory()->create(['business_id' => $other->id, 'role' => 'owner']))->getJson($url)->assertNotFound();
+    $this->actingAs($this->owner)->getJson($url)->assertOk();
+});
+
+it('cannot select another rental business through availability parameters', function () {
+    $other = $this->rental->replicate(['slug']);
+    $other->slug = 'isolated-native-rental';
+    $other->rental_hourly_price = 7000;
+    $other->save();
+    $other->workingHours()->create(['weekday' => 2, 'is_closed' => false, 'start' => '09:00', 'end' => '18:00']);
+    $sub = new Subscription(['business_id' => $other->id, 'status' => 'active', 'current_period_ends_at' => now()->addMonth()]);
+    $sub->applyPlanSnapshot(Plan::where('code', 'rental')->firstOrFail());
+    $sub->save();
+    $owner = User::factory()->create(['business_id' => $other->id, 'role' => 'owner']);
+    $slots = $this->actingAs($owner)->getJson('/api/rental/availability?date=2026-10-27&duration_minutes=90&business_id='.$this->rental->id)->assertOk()->json('data');
+    expect(collect($slots)->firstWhere('starts_at', '2026-10-27 10:00')['price'])->toBe(10500);
+});
+
 it('prepares only the verified demo rental and is safe to run again', function () {
     Storage::fake('public');
     $this->rental->update(['name' => 'TEST Rental Demo']);

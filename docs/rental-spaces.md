@@ -19,6 +19,12 @@ The `rental` subscription costs **25,000 AMD monthly**. Its annual price is 300,
 
 Up to 20 files per space. Images: JPEG, PNG and WebP, up to 10 MiB each. Videos: MP4 and WebM, up to 50 MiB each. Files are scoped to the business; captions/order can be edited and files removed. Playback depends on the video codec supported by the customer's browser; this version does not transcode videos.
 
+## Native manual availability
+
+`GET /api/rental/availability?date=YYYY-MM-DD&duration_minutes=120` returns the authenticated rental business's slots and timezone with `Cache-Control: no-store`. It uses the existing tenant, owner/manager, onboarding and subscription guards and is limited to 120 requests/minute. It works when the public profile is hidden and ignores caller-supplied business IDs. Schedule, duration, buffers and conflict rules are shared with public availability and the locked reservation write path.
+
+Deploy this API endpoint before publishing the paired `vizit-mobile` rental update. This endpoint adds no migration or dependency; an existing rental-capable deployment only needs the code pull and `php artisan optimize:clear`.
+
 ## Deployment
 
 1. Deploy this API change before the corresponding `smartbook-we` frontend change. Use the deployment's existing environment and back up its database.
@@ -33,8 +39,8 @@ Rollback must not restore a non-null service constraint while rental booking his
 
 ## Validation
 
-28 rental integration scenarios cover registration/onboarding, plan separation, no-catalog behavior, server prices, 2-hour/5-hour/3-day stays, later-day conflicts, buffers/breaks/blocks, handover restrictions, continuous schedules, expired holds, OTP management, rescheduling, tenant isolation, ledger retries/refunds, public logo/cover/gallery delivery, idempotent demo setup and overnight/report boundaries.
+31 rental integration scenarios cover registration/onboarding, plan separation, no-catalog behavior, server prices, 2-hour/5-hour/3-day stays, later-day conflicts, buffers/breaks/blocks, handover restrictions, continuous schedules, expired holds, OTP management, rescheduling, tenant isolation, ledger retries/refunds, public logo/cover/gallery delivery, idempotent demo setup, overnight/report boundaries and authenticated manual availability for hidden profiles.
 
-The social-login test fixture now uses an already registered customer, matching the existing login contract. An additional test proves that Google login does not silently create a new customer. Authentication and legal-acceptance behavior are unchanged. The complete suite passes 154 tests.
+The social-login test fixture uses an already registered customer, matching the existing login contract. An additional test proves that Google login does not silently create a new customer. Authentication and legal-acceptance behavior are unchanged. The complete suite passes 193 tests.
 
 Validation used a disposable SQLite database. Production MySQL migration behavior, real email/Telegram delivery, video playback and desktop/mobile browser interactions remain staging checks. No live business, payment or booking data was changed.

@@ -46,6 +46,22 @@ class RentalController extends Controller
         return response()->json(['data' => $bookings->map(fn ($booking) => $this->serialize($booking)), 'timezone' => $business->effectiveTimezone()]);
     }
 
+    public function availability(Request $request, RentalBookingService $rentals)
+    {
+        $business = $this->business($request);
+        $data = $request->validate([
+            'date' => ['required', 'date_format:Y-m-d'],
+            'duration_minutes' => ['required', 'integer'],
+        ]);
+
+        // Owner reservations remain available when the public profile is hidden.
+        // The rental service applies the same duration, schedule and conflict rules.
+        return response()->json([
+            'data' => $rentals->slots($business, $data['date'], (int) $data['duration_minutes']),
+            'timezone' => $business->effectiveTimezone(),
+        ])->header('Cache-Control', 'no-store');
+    }
+
     public function store(Request $request, RentalBookingService $rentals)
     {
         $business = $this->business($request);

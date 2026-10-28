@@ -624,6 +624,7 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'role:owner,manager'])->gr
     Route::delete('/rental/gallery/{media}', [\App\Http\Controllers\Api\RentalSettingsController::class, 'destroyMedia']);
 });
 Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensure.billable', 'role:owner,manager'])->group(function () {
+    Route::get('/rental/availability', [\App\Http\Controllers\Api\RentalController::class, 'availability'])->middleware('throttle:120,1');
     Route::get('/rental/bookings', [\App\Http\Controllers\Api\RentalController::class, 'index']);
     Route::post('/rental/bookings', [\App\Http\Controllers\Api\RentalController::class, 'store']);
     Route::patch('/rental/bookings/{booking}', [\App\Http\Controllers\Api\RentalController::class, 'update']);
