@@ -15,6 +15,13 @@ return [
     'providers' => [
         'default' => env('BILLING_DEFAULT_PROVIDER', $isNonProduction ? 'idbank_mock' : 'idbank'),
         'mode' => env('BILLING_PROVIDER_MODE', $isNonProduction ? 'mock' : 'live'),
+        'idram' => [
+            'live_enabled' => filter_var(env('IDRAM_LIVE_ENABLED', false), FILTER_VALIDATE_BOOL),
+            'rec_account' => env('IDRAM_REC_ACCOUNT'),
+            'secret_key' => env('IDRAM_SECRET_KEY'),
+            'email' => env('IDRAM_EMAIL', 'info@vizit.am'),
+            'checkout_minutes' => (int) env('IDRAM_CHECKOUT_MINUTES', 30),
+        ],
         'idbank' => [
             'live_enabled' => filter_var(env('IDBANK_LIVE_ENABLED', false), FILTER_VALIDATE_BOOL),
             // Keep live checkout closed until the merchant contract's exact request,

@@ -8,6 +8,7 @@ class PaymentWebhookEvent extends Model
 {
     protected $fillable = [
         'provider',
+        'deduplication_key',
         'event_type',
         'signature',
         'transaction_reference',

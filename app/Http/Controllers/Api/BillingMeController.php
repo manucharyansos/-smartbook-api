@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Services\Billing\BusinessPricingResolver;
+use App\Services\Billing\BillingPaymentProviders;
 use Illuminate\Http\Request;
 
 class BillingMeController extends Controller
@@ -111,22 +112,7 @@ class BillingMeController extends Controller
             })
             ->values();
 
-        $defaultProvider = (string) config('billing.providers.default', 'idbank_mock');
-        $idbankCredentials = [
-            config('billing.providers.idbank.merchant_id'),
-            config('billing.providers.idbank.terminal_id'),
-            config('billing.providers.idbank.secret'),
-            config('billing.providers.idbank.webhook_secret'),
-        ];
-        $liveReady = $defaultProvider === 'idbank'
-            && (bool) config('billing.providers.idbank.live_enabled', false)
-            && (bool) config('billing.providers.idbank.contract_mapping_ready', false)
-            && collect($idbankCredentials)->every(
-                fn ($value) => filled($value) && $value !== 'CHANGE_ME'
-            );
-        $mockReady = $defaultProvider === 'idbank_mock'
-            && app()->environment(['local', 'testing'])
-            && (bool) config('billing.allow_mock_payments', false);
+        $paymentProvider = BillingPaymentProviders::status();
 
         return response()->json([
             'data' => [
@@ -155,12 +141,7 @@ class BillingMeController extends Controller
                     'locations_count' => $business->locationCount(),
                     'locations_limit' => $business->locationLimit(),
                 ],
-                'payment_provider' => [
-                    'default' => $defaultProvider,
-                    'mode' => $defaultProvider === 'idbank' ? 'live' : 'mock',
-                    'live_ready' => $liveReady,
-                    'checkout_available' => $liveReady || $mockReady,
-                ],
+                'payment_provider' => $paymentProvider,
                 'pricing' => $pricing,
                 'individual_offers' => $individualOffers,
                 'subscription' => $sub ? [

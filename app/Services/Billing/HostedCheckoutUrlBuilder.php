@@ -9,6 +9,8 @@ class HostedCheckoutUrlBuilder
 {
     public function build(PaymentTransaction $transaction, Invoice $invoice): array
     {
+        if ($transaction->provider === 'idram') return app(IdramGateway::class)->checkout($transaction, $invoice);
+
         $provider = $transaction->provider;
         $frontendBase = rtrim((string) config('billing.frontend_base_url', config('app.url')), '/');
         $returnBase = (string) config('billing.providers.idbank.return_url', $frontendBase . '/payment-return');
