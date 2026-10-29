@@ -575,6 +575,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/me', [AdminAuthController::class, 'me']);
 
     Route::get('/dashboard', [AdminDashboardController::class, 'index'])->middleware('admin:super_admin');
+    Route::get('/system', \App\Http\Controllers\Admin\SystemStatusController::class)->middleware('admin:super_admin');
     Route::get('/analytics', [AdminDashboardController::class, 'analytics'])->middleware('admin:super_admin');
 
     Route::get('/businesses', [BusinessManagementController::class, 'index']);

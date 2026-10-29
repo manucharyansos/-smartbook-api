@@ -321,54 +321,7 @@ class AdminAnalyticsController extends Controller
             ->whereBetween('starts_at', [$from, $to])
             ->when($businessId, fn($qq) => $qq->where('business_id', $businessId)); // Փոխել salon_id-ից business_id
 
-        if ($groupBy === 'day') {
-            return $q->select(
-                DB::raw('DATE(starts_at) as period'),
-                DB::raw('COUNT(*) as bookings'),
-                DB::raw('SUM(final_price) as revenue')
-            )
-                ->groupBy('period')
-                ->orderBy('period')
-                ->get()
-                ->map(fn($x) => [
-                    'period' => (string) $x->period,
-                    'bookings' => (int) $x->bookings,
-                    'revenue' => (float) $x->revenue,
-                ])->all();
-        }
-
-        if ($groupBy === 'week') {
-            return $q->select(
-                DB::raw('YEAR(starts_at) as y'),
-                DB::raw('WEEK(starts_at, 3) as w'),
-                DB::raw('COUNT(*) as bookings'),
-                DB::raw('SUM(final_price) as revenue')
-            )
-                ->groupBy('y', 'w')
-                ->orderBy('y')
-                ->orderBy('w')
-                ->get()
-                ->map(fn($x) => [
-                    'period' => "{$x->y}-W{$x->w}",
-                    'bookings' => (int) $x->bookings,
-                    'revenue' => (float) $x->revenue,
-                ])->all();
-        }
-
-        // month
-        return $q->select(
-            DB::raw('DATE_FORMAT(starts_at, "%Y-%m") as period'),
-            DB::raw('COUNT(*) as bookings'),
-            DB::raw('SUM(final_price) as revenue')
-        )
-            ->groupBy('period')
-            ->orderBy('period')
-            ->get()
-            ->map(fn($x) => [
-                'period' => (string) $x->period,
-                'bookings' => (int) $x->bookings,
-                'revenue' => (float) $x->revenue,
-            ])->all();
+        return $this->groupSeries($q, $groupBy, true);
     }
 
     private function bookingsSeries(Carbon $from, Carbon $to, string $groupBy, ?int $businessId = null): array
@@ -377,48 +330,30 @@ class AdminAnalyticsController extends Controller
             ->whereBetween('starts_at', [$from, $to])
             ->when($businessId, fn($qq) => $qq->where('business_id', $businessId)); // Փոխել salon_id-ից business_id
 
-        if ($groupBy === 'day') {
-            return $q->select(
-                DB::raw('DATE(starts_at) as period'),
-                DB::raw('COUNT(*) as bookings')
-            )
-                ->groupBy('period')
-                ->orderBy('period')
-                ->get()
-                ->map(fn($x) => [
-                    'period' => (string) $x->period,
-                    'bookings' => (int) $x->bookings,
-                ])->all();
+        return $this->groupSeries($q, $groupBy, false);
+    }
+
+    /**
+     * Buckets bookings by business-local day, ISO week or month in PHP, so the
+     * same code runs on MySQL and SQLite and periods follow Yerevan time.
+     */
+    private function groupSeries($query, string $groupBy, bool $withRevenue): array
+    {
+        $timezone = config('app.business_timezone', 'Asia/Yerevan');
+        $buckets = [];
+        foreach ($query->select(['starts_at', 'final_price'])->orderBy('starts_at')->cursor() as $booking) {
+            $local = Carbon::parse($booking->starts_at)->timezone($timezone);
+            $key = match ($groupBy) {
+                'day' => $local->format('Y-m-d'),
+                'week' => $local->isoWeekYear().'-W'.$local->isoWeek(),
+                default => $local->format('Y-m'),
+            };
+            $buckets[$key] ??= ['period' => $key, 'bookings' => 0, 'revenue' => 0.0];
+            $buckets[$key]['bookings']++;
+            $buckets[$key]['revenue'] += (float) $booking->final_price;
         }
 
-        if ($groupBy === 'week') {
-            return $q->select(
-                DB::raw('YEAR(starts_at) as y'),
-                DB::raw('WEEK(starts_at, 3) as w'),
-                DB::raw('COUNT(*) as bookings')
-            )
-                ->groupBy('y', 'w')
-                ->orderBy('y')
-                ->orderBy('w')
-                ->get()
-                ->map(fn($x) => [
-                    'period' => "{$x->y}-W{$x->w}",
-                    'bookings' => (int) $x->bookings,
-                ])->all();
-        }
-
-        // month
-        return $q->select(
-            DB::raw('DATE_FORMAT(starts_at, "%Y-%m") as period'),
-            DB::raw('COUNT(*) as bookings')
-        )
-            ->groupBy('period')
-            ->orderBy('period')
-            ->get()
-            ->map(fn($x) => [
-                'period' => (string) $x->period,
-                'bookings' => (int) $x->bookings,
-            ])->all();
+        return array_values(array_map(fn ($bucket) => $withRevenue ? $bucket : ['period' => $bucket['period'], 'bookings' => $bucket['bookings']], $buckets));
     }
 
     private function calculateMRR(): float
