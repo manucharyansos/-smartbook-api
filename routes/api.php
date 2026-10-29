@@ -630,6 +630,12 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::patch('/plans/{plan}/toggle-visible', [AdminPlanController::class, 'toggleVisible'])->middleware('admin:super_admin');
 });
 
+Route::middleware(['auth:sanctum', 'ensure.business', 'role:owner,manager'])->group(function () {
+    Route::get('/business/service-discounts', [\App\Http\Controllers\Api\ServiceDiscountController::class, 'show']);
+    Route::put('/business/service-discounts', [\App\Http\Controllers\Api\ServiceDiscountController::class, 'update']);
+});
+Route::get('/client/discounts/{slug}', [\App\Http\Controllers\Api\ServiceDiscountController::class, 'progress'])->middleware(['auth:sanctum', 'throttle:60,1']);
+
 // Space reservations share authentication, tenant and billing guards with the workspace.
 Route::get('/public/businesses/{slug}/rental-availability', [PublicBookingController::class, 'rentalAvailability'])->middleware('throttle:120,1');
 Route::middleware(['auth:sanctum', 'ensure.business', 'role:owner,manager'])->group(function () {

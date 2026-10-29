@@ -21,6 +21,7 @@ use App\Services\GiftCardService;
 use App\Services\GuestBookingAccessService;
 use App\Services\LoyaltyService;
 use App\Services\WaitlistService;
+use App\Services\ServiceDiscountService;
 use Illuminate\Support\Facades\Mail;
 use App\Support\Phone;
 use Illuminate\Http\Request;
@@ -587,6 +588,7 @@ class PublicBookingController extends Controller
             'show_cover' => (bool) ($business->show_cover ?? true),
             'show_staff' => !$business->isRental() && (bool) ($business->show_staff ?? true),
             'show_services' => !$business->isRental() && (bool) ($business->show_services ?? true),
+            'service_discounts' => $business->isRental() ? null : app(ServiceDiscountService::class)->tiers($business),
             'gallery' => $business->relationLoaded('gallery') ? $business->gallery : [],
             'rental' => $business->isRental() ? [
                 'hourly_price' => $business->rental_hourly_price, 'currency' => 'AMD',
@@ -1006,8 +1008,10 @@ class PublicBookingController extends Controller
 
         // Persist booking and items in a transaction
         $booking = null;
+        $discount = ['percent' => 0, 'type' => null, 'amount' => 0];
         DB::transaction(function () use (
             &$booking,
+            &$discount,
             $business,
             $staff,
             $client,
@@ -1053,7 +1057,8 @@ class PublicBookingController extends Controller
 
             $booking = Booking::query()->create($this->withoutUnavailableLocationAttribute($bookingPayload, 'bookings'));
 
-            $this->applyPublicBookingBenefits($booking, $client, $data, $priceIsNull ? 0 : $totalPrice);
+            $discount = app(ServiceDiscountService::class)->apply($business, $client, [$booking], count($requestedIds));
+            $this->applyPublicBookingBenefits($booking, $client, $data, $priceIsNull ? 0 : (int) $booking->final_price);
 
             // Create booking items for each service, preserving order
             foreach ($requestedIds as $idx => $sid) {
@@ -1078,6 +1083,7 @@ class PublicBookingController extends Controller
                 'phone'                     => $phoneNorm,
                 'expires_at'                => $expires->toISOString(),
                 'verification_delivery'     => $verificationDelivery,
+                'discount'                  => $discount,
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
@@ -1269,7 +1275,8 @@ class PublicBookingController extends Controller
             $code,
             $expires,
             $groupId,
-            $legalAcceptance
+            $legalAcceptance,
+            &$discount
         ) {
             foreach ($linesData as $idx => $row) {
                 /** @var Service $svc */
@@ -1319,6 +1326,7 @@ class PublicBookingController extends Controller
 
                 $bookings[] = $booking;
             }
+            $discount = app(ServiceDiscountService::class)->apply($business, $client, $bookings, count($bookings));
         });
 
         $verificationDelivery = $this->sendVerificationNotifications($bookings[0], $code, $expires, $bookings[0]->contactEmail());
@@ -1327,6 +1335,7 @@ class PublicBookingController extends Controller
             'data' => [
                 'booking_code'             => $bookings[0]->booking_code ?? null,
                 'group_id'                 => $groupId,
+                'discount'                 => $discount ?? ['percent' => 0, 'type' => null, 'amount' => 0],
                 'needs_phone_verification' => true,
                 'phone'                    => $phoneNorm,
                 'expires_at'               => $expires->toISOString(),
@@ -1655,6 +1664,9 @@ class PublicBookingController extends Controller
             return $root;
         });
 
+        // A recurring series is one service per visit, so only visit tiers can apply.
+        $discount = app(ServiceDiscountService::class)->apply($business, $client, $createdBookings, 1);
+        $booking->refresh();
         $this->applyPublicBookingBenefits($booking, $client, $data, (int) ($booking->final_price ?? 0));
 
         $verificationDelivery = $this->sendVerificationNotifications($booking, $code, $expires, $booking->contactEmail());
@@ -1668,6 +1680,7 @@ class PublicBookingController extends Controller
                 'recurrence_id' => $recurrenceId,
                 'recurrence_count' => count($createdBookings),
                 'verification_delivery' => $verificationDelivery,
+                'discount' => $discount,
             ],
             'meta' => ['business_type' => $business->business_type, 'vertical' => $business->normalizedVertical()],
         ], 201);
