@@ -194,7 +194,7 @@ class AuthController extends Controller
         // belongs to business_category_id, not to the legacy beauty/dental field.
         $businessType = $vertical;
 
-        $defaultPlan = $vertical === BusinessVertical::RENTALS ? 'rental' : 'start';
+        $defaultPlan = Plan::defaultCodeFor($vertical);
         $requestedPlanCode = trim((string) ($data['plan_code'] ?? $defaultPlan)) ?: $defaultPlan;
         $plan = Plan::query()
             ->where('code', $requestedPlanCode)

@@ -9,6 +9,13 @@ use Illuminate\Validation\Rule;
 
 class PlanController extends Controller
 {
+    private const AUDIENCE_TYPES = [
+        'services' => ['beauty'],
+        'healthcare' => ['dental'],
+        'rentals' => ['rentals'],
+        'all' => ['beauty', 'dental'],
+    ];
+
     public function index(Request $request)
     {
         $query = Plan::query();
@@ -18,9 +25,53 @@ class PlanController extends Controller
             $query->where('is_visible', true);
         }
 
-        $plans = $query->orderBy('sort_order')->orderBy('id')->get();
+        $plans = $query->orderBy('sort_order')->orderBy('id')->withCount('subscriptions')->get()
+            ->each(fn (Plan $plan) => $plan->setAttribute('audience', $plan->audience()));
 
         return response()->json(['success' => true, 'data' => $plans]);
+    }
+
+    /**
+     * Copies a plan for another business area so it can get its own price and limits.
+     * With detach_source, a shared plan stops being offered to that area.
+     */
+    public function copy(Request $request, Plan $plan)
+    {
+        $data = $request->validate([
+            'audience' => ['required', 'in:services,healthcare,rentals'],
+            'detach_source' => ['sometimes', 'boolean'],
+        ]);
+        abort_if($plan->audience() === $data['audience'], 422, 'The plan already belongs to this business area.');
+
+        $suffix = ['services' => 'services', 'healthcare' => 'health', 'rentals' => 'space'][$data['audience']];
+        $code = $plan->code.'-'.$suffix;
+        for ($n = 2; Plan::where('code', $code)->exists(); $n++) {
+            $code = $plan->code.'-'.$suffix.'-'.$n;
+        }
+
+        $copy = $plan->replicate(['subscriptions_count', 'audience']);
+        $copy->fill([
+            'code' => $code,
+            'version' => 1,
+            'allowed_business_types' => self::AUDIENCE_TYPES[$data['audience']],
+            'business_type' => ['services' => 'beauty', 'healthcare' => 'dental'][$data['audience']] ?? null,
+            // A copy stays hidden until its price and limits are reviewed.
+            'is_visible' => false,
+        ]);
+        if ($data['audience'] === 'rentals') {
+            $copy->fill(['staff_limit' => 0, 'seats' => 0]);
+        }
+        $copy->save();
+
+        if (($data['detach_source'] ?? false) && $plan->audience() === 'all') {
+            $remaining = $data['audience'] === 'healthcare' ? 'services' : 'healthcare';
+            $plan->update(['allowed_business_types' => self::AUDIENCE_TYPES[$remaining],
+                'business_type' => ['services' => 'beauty', 'healthcare' => 'dental'][$remaining]]);
+        }
+
+        $copy->setAttribute('audience', $copy->audience());
+
+        return response()->json(['success' => true, 'data' => $copy], 201);
     }
 
     public function store(Request $request)
@@ -28,7 +79,7 @@ class PlanController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'code' => 'required|string|unique:plans,code',
-            'business_type' => 'nullable|in:salon,clinic,beauty,dental,rentals',
+            'business_type' => 'nullable|in:salon,clinic,beauty,dental,rentals,services,healthcare',
             'description' => 'nullable|string',
             'price' => 'nullable|numeric|min:0',
             'monthly_price' => 'nullable|numeric|min:0',
@@ -36,12 +87,12 @@ class PlanController extends Controller
             'price_beauty' => 'nullable|numeric|min:0',
             'price_dental' => 'nullable|numeric|min:0',
             'currency' => 'required|string|max:10',
-            'seats' => 'nullable|integer|min:1',
-            'staff_limit' => 'nullable|integer|min:1',
+            'seats' => 'nullable|integer|min:'.($request->input('business_type') === 'rentals' ? '0' : '1'),
+            'staff_limit' => 'nullable|integer|min:'.($request->input('business_type') === 'rentals' ? '0' : '1'),
             'duration_days' => 'required|integer|min:1',
             'locations' => 'nullable|integer|min:1',
             'features' => 'nullable|array',
-            'features.staff_limit' => 'nullable|integer|min:1',
+            'features.staff_limit' => 'nullable|integer|min:'.($request->input('business_type') === 'rentals' ? '0' : '1'),
             'features.services_limit' => 'nullable|integer|min:1',
             'features.priority_support' => 'nullable|boolean',
             'features.custom_pricing' => 'nullable|boolean',
@@ -73,7 +124,7 @@ class PlanController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'code' => ['sometimes', 'string', Rule::unique('plans', 'code')->ignore($plan->id)],
-            'business_type' => 'nullable|in:salon,clinic,beauty,dental,rentals',
+            'business_type' => 'nullable|in:salon,clinic,beauty,dental,rentals,services,healthcare',
             'description' => 'nullable|string',
             'price' => 'nullable|numeric|min:0',
             'monthly_price' => 'nullable|numeric|min:0',
@@ -81,13 +132,13 @@ class PlanController extends Controller
             'price_beauty' => 'nullable|numeric|min:0',
             'price_dental' => 'nullable|numeric|min:0',
             'currency' => 'sometimes|string|max:10',
-            'seats' => 'nullable|integer|min:' . ($plan->code === 'rental' ? '0' : '1'),
-            'staff_limit' => 'nullable|integer|min:' . ($plan->code === 'rental' ? '0' : '1'),
+            'seats' => 'nullable|integer|min:' . ($plan->isRentalPlan() || $request->input('business_type') === 'rentals' ? '0' : '1'),
+            'staff_limit' => 'nullable|integer|min:' . ($plan->isRentalPlan() || $request->input('business_type') === 'rentals' ? '0' : '1'),
             'duration_days' => 'sometimes|integer|min:1',
             'locations' => 'nullable|integer|min:1',
             'features' => 'nullable|array',
-            'features.staff_limit' => 'nullable|integer|min:' . ($plan->code === 'rental' ? '0' : '1'),
-            'features.services_limit' => 'nullable|integer|min:' . ($plan->code === 'rental' ? '0' : '1'),
+            'features.staff_limit' => 'nullable|integer|min:' . ($plan->isRentalPlan() || $request->input('business_type') === 'rentals' ? '0' : '1'),
+            'features.services_limit' => 'nullable|integer|min:' . ($plan->isRentalPlan() || $request->input('business_type') === 'rentals' ? '0' : '1'),
             'features.priority_support' => 'nullable|boolean',
             'features.custom_pricing' => 'nullable|boolean',
             'features.partner_terms' => 'nullable|boolean',
@@ -153,12 +204,21 @@ class PlanController extends Controller
         ));
 
         if (array_key_exists('business_type', $validated)) {
-            $validated['allowed_business_types'] = match ($validated['business_type']) {
-                'beauty', 'salon' => ['beauty'],
-                'dental', 'clinic' => ['dental'],
-                'rentals' => ['rentals'],
-                default => ($plan?->code === 'rental' ? ['rentals'] : ['beauty', 'dental']),
+            $audience = match ($validated['business_type']) {
+                'beauty', 'salon', 'services' => 'services',
+                'dental', 'clinic', 'healthcare' => 'healthcare',
+                'rentals' => 'rentals',
+                default => $plan?->isRentalPlan() ? 'rentals' : 'all',
             };
+            $validated['allowed_business_types'] = self::AUDIENCE_TYPES[$audience];
+            // Legacy single-type column kept in step for older readers.
+            $validated['business_type'] = ['services' => 'beauty', 'healthcare' => 'dental'][$audience] ?? null;
+            if ($audience === 'rentals') {
+                $validated['staff_limit'] = 0;
+                $validated['seats'] = 0;
+                $validated['features']['staff_limit'] = 0;
+                unset($validated['features']['services_limit']);
+            }
         }
 
         $monthly = $validated['monthly_price']

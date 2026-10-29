@@ -623,6 +623,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::apiResource('/plans', AdminPlanController::class)->middleware('admin:super_admin');
     Route::post('/plans/reorder', [AdminPlanController::class, 'reorder'])->middleware('admin:super_admin');
+    Route::post('/plans/{plan}/copy', [AdminPlanController::class, 'copy'])->middleware('admin:super_admin');
     Route::patch('/plans/{plan}/toggle-active', [AdminPlanController::class, 'toggleActive'])->middleware('admin:super_admin');
     Route::patch('/plans/{plan}/toggle-visible', [AdminPlanController::class, 'toggleVisible'])->middleware('admin:super_admin');
 });

@@ -53,8 +53,8 @@ class Plan extends Model
         $allowed = $this->allowed_business_types;
 
         // A venue subscription must never be interchangeable with staff-based plans.
-        if ($type === BusinessVertical::RENTALS || $this->code === 'rental') {
-            return $type === BusinessVertical::RENTALS && $this->code === 'rental';
+        if ($type === BusinessVertical::RENTALS || $this->isRentalPlan()) {
+            return $type === BusinessVertical::RENTALS && $this->isRentalPlan();
         }
 
         if (!is_array($allowed) || count($allowed) === 0) {
@@ -65,6 +65,42 @@ class Plan extends Model
         }
 
         return in_array($type, $allowed, true);
+    }
+
+    /** Which business area may buy this plan: services, healthcare, rentals or all (services + healthcare). */
+    public function audience(): string
+    {
+        if ($this->isRentalPlan()) {
+            return BusinessVertical::RENTALS;
+        }
+        $allowed = is_array($this->allowed_business_types) ? array_values(array_unique($this->allowed_business_types)) : [];
+        if ($allowed === []) {
+            $allowed = match ($this->business_type) {
+                'beauty', 'salon' => ['beauty'],
+                'dental', 'clinic' => ['dental'],
+                default => ['beauty', 'dental'],
+            };
+        }
+        if ($allowed === ['beauty']) return BusinessVertical::SERVICES;
+        if ($allowed === ['dental']) return BusinessVertical::HEALTHCARE;
+
+        return 'all';
+    }
+
+    public function isRentalPlan(): bool
+    {
+        return $this->code === 'rental' || $this->allowed_business_types === [BusinessVertical::RENTALS];
+    }
+
+    /** The plan a new business of this area starts its trial on when it did not pick one. */
+    public static function defaultCodeFor(string $vertical): string
+    {
+        $vertical = BusinessVertical::normalize($vertical);
+        $preferred = $vertical === BusinessVertical::RENTALS ? 'rental' : 'start';
+        $plans = self::query()->where('is_active', true)->where('is_visible', true)->orderBy('sort_order')->orderBy('id')->get()
+            ->filter(fn (self $plan) => $plan->isSelfServe() && $plan->supportsBusinessType($vertical));
+
+        return ($plans->firstWhere('code', $preferred) ?? $plans->first())?->code ?? $preferred;
     }
 
     public function supportsBusinessType(string $type): bool
@@ -133,7 +169,7 @@ class Plan extends Model
     public function getFeaturesList(): array
     {
         $f = is_array($this->features) ? $this->features : [];
-        if ($this->code === 'rental') {
+        if ($this->isRentalPlan()) {
             return [
                 'staff_limit' => 0, 'services_limit' => 0, 'locations' => 1,
                 'staff_seat_based' => false, 'owners_unlimited' => true, 'managers_unlimited' => true,

@@ -89,7 +89,7 @@ class Subscription extends Model
     public function features(): array
     {
         $features = is_array($this->features_snapshot) ? $this->features_snapshot : [];
-        if (($features['rentals'] ?? false) === true || $this->plan?->code === 'rental') {
+        if (($features['rentals'] ?? false) === true || $this->plan?->isRentalPlan()) {
             return $features;
         }
 

@@ -97,7 +97,7 @@ class SocialAuthController extends Controller
         }
 
         if ($audience === 'business' && $mode === 'register') {
-            $planCode = trim((string) ($data['plan_code'] ?? ($businessType === BusinessVertical::RENTALS ? 'rental' : 'start'))) ?: 'start';
+            $planCode = trim((string) ($data['plan_code'] ?? Plan::defaultCodeFor($businessType))) ?: Plan::defaultCodeFor($businessType);
             if (!$this->selfServePlan($planCode, $businessType)) {
                 throw ValidationException::withMessages([
                     'plan_code' => 'The selected plan is not available for self-service registration.',
@@ -517,7 +517,7 @@ class SocialAuthController extends Controller
         $vertical = BusinessVertical::normalize(
             $registration['business_type'] ?? BusinessVertical::SERVICES
         );
-        $planCode = trim((string) ($registration['plan_code'] ?? ($vertical === BusinessVertical::RENTALS ? 'rental' : 'start'))) ?: 'start';
+        $planCode = trim((string) ($registration['plan_code'] ?? Plan::defaultCodeFor($vertical))) ?: Plan::defaultCodeFor($vertical);
         $plan = $this->selfServePlan($planCode, $vertical);
         if (!$plan) {
             throw ValidationException::withMessages([
