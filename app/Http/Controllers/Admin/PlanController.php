@@ -156,7 +156,8 @@ class PlanController extends Controller
             $validated['allowed_business_types'] = match ($validated['business_type']) {
                 'beauty', 'salon' => ['beauty'],
                 'dental', 'clinic' => ['dental'],
-                default => ['beauty', 'dental'],
+                'rentals' => ['rentals'],
+                default => ($plan?->code === 'rental' ? ['rentals'] : ['beauty', 'dental']),
             };
         }
 

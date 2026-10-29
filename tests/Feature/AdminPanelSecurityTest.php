@@ -164,3 +164,12 @@ it('shows a rental business with its rates, discounts, team and Vizit invoices t
         ->assertJsonCount(2, 'data.billing.invoices')
         ->assertJsonPath('data.team.0.email', $owner->email);
 });
+
+it('keeps the rental plan limited to rental spaces when an admin edits it', function () {
+    $plan = \App\Models\Plan::where('code', 'rental')->firstOrFail();
+    Sanctum::actingAs(makePlatformAdmin());
+    $this->putJson("/api/admin/plans/{$plan->id}", ['name' => 'Վարձով տարածք', 'business_type' => null, 'monthly_price' => 25000])->assertOk();
+    expect($plan->fresh()->allowed_business_types)->toBe(['rentals']);
+    $this->putJson("/api/admin/plans/{$plan->id}", ['name' => 'Վարձով տարածք', 'business_type' => 'rentals', 'monthly_price' => 25000])->assertOk();
+    expect($plan->fresh()->allowed_business_types)->toBe(['rentals']);
+});
