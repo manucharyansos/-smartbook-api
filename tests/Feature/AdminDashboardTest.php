@@ -32,3 +32,12 @@ it('reports deployment status to the super admin only', function () {
     Sanctum::actingAs(Admin::create(['name' => 'Owner', 'email' => 'sys@vizit.test', 'password' => Hash::make('x-secure-pass-1'), 'role' => Admin::ROLE_SUPER_ADMIN, 'is_active' => true]));
     $this->getJson('/api/admin/system')->assertOk()->assertJsonPath('data.pending_migrations', [])->assertJsonStructure(['data' => ['commit', 'routes_cached', 'database']]);
 });
+
+it('shows the cause of a server error to a super admin only', function () {
+    \Illuminate\Support\Facades\Route::middleware(['api', 'auth:sanctum', 'admin'])->get('/api/admin/__boom', fn () => throw new RuntimeException('database exploded'));
+    Sanctum::actingAs(Admin::create(['name' => 'Support', 'email' => 'boom-support@vizit.test', 'password' => Hash::make('x-secure-pass-1'), 'role' => Admin::ROLE_SUPPORT, 'is_active' => true]));
+    expect($this->getJson('/api/admin/__boom')->assertStatus(500)->json('debug'))->toBeNull();
+    Sanctum::actingAs(Admin::create(['name' => 'Owner', 'email' => 'boom@vizit.test', 'password' => Hash::make('x-secure-pass-1'), 'role' => Admin::ROLE_SUPER_ADMIN, 'is_active' => true]));
+    expect($this->getJson('/api/admin/__boom')->assertStatus(500)->json('debug'))->toContain('RuntimeException: database exploded');
+    $this->getJson('/api/admin/billing/invoices?status=nope')->assertUnprocessable()->assertJsonMissingPath('debug');
+});

@@ -411,7 +411,7 @@ class AdminAnalyticsController extends Controller
     private function topSources(Carbon $start, Carbon $end, ?int $businessId = null): array
     {
         $base = DB::table('bookings')
-            ->selectRaw('COALESCE(NULLIF(source, ""), "unknown") as booking_source, final_price, status, business_id')
+            ->selectRaw("COALESCE(NULLIF(source, ''), 'unknown') as booking_source, final_price, status, business_id")
             ->whereBetween('starts_at', [$start, $end]);
 
         if ($businessId) {
@@ -420,7 +420,7 @@ class AdminAnalyticsController extends Controller
 
         return DB::query()
             ->fromSub($base, 'booking_sources')
-            ->selectRaw('booking_source, COUNT(*) as total, SUM(CASE WHEN status IN ("confirmed", "done") THEN final_price ELSE 0 END) as revenue')
+            ->selectRaw("booking_source, COUNT(*) as total, SUM(CASE WHEN status IN ('confirmed', 'done') THEN final_price ELSE 0 END) as revenue")
             ->groupBy('booking_source')
             ->orderByDesc('total')
             ->limit(6)
