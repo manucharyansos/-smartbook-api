@@ -580,6 +580,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/businesses', [BusinessManagementController::class, 'index']);
     Route::get('/businesses/{business}', [BusinessManagementController::class, 'show'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/suspend', [BusinessManagementController::class, 'suspend'])->middleware('admin:super_admin');
+    Route::get('/businesses/{business}/purge-preview', [BusinessManagementController::class, 'purgePreview'])->middleware('admin:super_admin');
+    Route::delete('/businesses/{business}', [BusinessManagementController::class, 'purge'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/restore', [BusinessManagementController::class, 'restore'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/plan', [BusinessManagementController::class, 'updatePlan'])->middleware('admin:super_admin');
     Route::post('/businesses/{business}/trial', [BusinessManagementController::class, 'extendTrial'])->middleware('admin:super_admin');
@@ -605,6 +607,18 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/analytics/revenue', [AdminAnalyticsController::class, 'revenue'])->middleware('admin:super_admin');
     Route::post('/analytics/export/businesses', [AdminAnalyticsController::class, 'exportBusinesses'])->middleware('admin:super_admin');
     Route::post('/analytics/export/revenue', [AdminAnalyticsController::class, 'exportRevenue'])->middleware('admin:super_admin');
+
+    // Vizit's own subscription income (invoices paid to Vizit), separate from customer booking revenue.
+    Route::middleware('admin:super_admin,finance')->prefix('billing')->group(function () {
+        Route::get('/summary', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'summary']);
+        Route::get('/invoices', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'invoices']);
+        Route::get('/transactions', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'transactions']);
+    });
+    Route::middleware('admin:super_admin')->prefix('billing')->group(function () {
+        Route::post('/invoices/{invoice}/approve', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'approve'])->whereNumber('invoice');
+        Route::post('/invoices/{invoice}/cancel', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'cancel'])->whereNumber('invoice');
+        Route::post('/transactions/{transaction}/resolve-review', [\App\Http\Controllers\Admin\BillingOverviewController::class, 'resolveReview']);
+    });
 
     Route::apiResource('/plans', AdminPlanController::class)->middleware('admin:super_admin');
     Route::post('/plans/reorder', [AdminPlanController::class, 'reorder'])->middleware('admin:super_admin');

@@ -423,9 +423,7 @@ class AdminAnalyticsController extends Controller
 
     private function calculateMRR(): float
     {
-        return (float) Subscription::where('status', 'active')
-            ->join('plans', 'subscriptions.plan_id', '=', 'plans.id')
-            ->sum(DB::raw('COALESCE(plans.monthly_price, plans.price, plans.price_beauty, plans.price_dental, 0)'));
+        return (float) app(\App\Services\Billing\SubscriptionIncome::class)->monthlyRecurringRevenue();
     }
 
     private function safeRate(int|float $value, int|float $total): float
@@ -438,8 +436,8 @@ class AdminAnalyticsController extends Controller
 
     private function businessMix(Carbon $start, Carbon $end, ?int $businessId = null): array
     {
-        $businessTypeExpression = "CASE WHEN COALESCE(NULLIF(vertical, ''), business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
-        $bookingBusinessTypeExpression = "CASE WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
+        $businessTypeExpression = "CASE WHEN COALESCE(NULLIF(vertical, ''), business_type) = 'rentals' THEN 'rentals' WHEN COALESCE(NULLIF(vertical, ''), business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
+        $bookingBusinessTypeExpression = "CASE WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) = 'rentals' THEN 'rentals' WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
 
         $businessRows = Business::query()
             ->selectRaw("{$businessTypeExpression} as business_type, COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active")

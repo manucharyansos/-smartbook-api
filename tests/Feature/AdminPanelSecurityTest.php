@@ -146,3 +146,21 @@ it('suspends and restores a business without destroying user activation state', 
         ->and($business->fresh()->suspended_at)->toBeNull()
         ->and($user->fresh()->is_active)->toBeTrue();
 });
+
+it('shows a rental business with its rates, discounts, team and Vizit invoices to the super admin', function () {
+    $business = Business::factory()->onboardingCompleted()->create(['business_type' => 'rentals', 'vertical' => 'rentals',
+        'rental_hourly_price' => 5000, 'rental_min_minutes' => 60, 'rental_max_minutes' => 600,
+        'rental_duration_discounts' => [['min_minutes' => 180, 'percent' => 5]]]);
+    $owner = User::factory()->create(['business_id' => $business->id, 'role' => 'owner']);
+    $planId = \App\Models\Plan::where('code', 'rental')->value('id');
+    \App\Models\Invoice::query()->withoutGlobalScopes()->create(['business_id' => $business->id, 'plan_id' => $planId, 'amount' => 25000, 'currency' => 'AMD', 'status' => 'approved', 'paid_at' => now()]);
+    \App\Models\Invoice::query()->withoutGlobalScopes()->create(['business_id' => $business->id, 'plan_id' => $planId, 'amount' => 25000, 'currency' => 'AMD', 'status' => 'pending']);
+    Sanctum::actingAs(makePlatformAdmin());
+
+    $this->getJson("/api/admin/businesses/{$business->id}")->assertOk()
+        ->assertJsonPath('data.rental.hourly_price', 5000)
+        ->assertJsonPath('data.rental.duration_discounts.0.percent', 5)
+        ->assertJsonPath('data.billing.paid_total', 25000)->assertJsonPath('data.billing.pending_total', 25000)
+        ->assertJsonCount(2, 'data.billing.invoices')
+        ->assertJsonPath('data.team.0.email', $owner->email);
+});

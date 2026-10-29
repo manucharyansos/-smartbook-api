@@ -173,6 +173,9 @@ class BusinessManagementController extends Controller
                     'work_end' => $business->work_end,
                     'slot_step_minutes' => $business->slot_step_minutes,
                     'timezone' => $business->timezone,
+                    'billing_status' => $business->billing_status,
+                    'is_public_profile_enabled' => (bool) $business->is_public_profile_enabled,
+                    'is_marketplace_visible' => (bool) $business->is_marketplace_visible,
                     'created_at' => $business->created_at?->toISOString(),
                 ],
                 'subscription' => $sub ? [
@@ -219,8 +222,55 @@ class BusinessManagementController extends Controller
                 ],
                 'available_plans' => $plans,
                 'pricing_overrides' => $pricingOverrides,
+                'team' => $business->users->sortBy(fn ($user) => [$user->role !== User::ROLE_OWNER, $user->id])->values()
+                    ->map(fn ($user) => $user->only(['id', 'name', 'email', 'role', 'is_active', 'created_at'])),
+                'billing' => $this->billingSnapshot($business),
+                'rental' => $business->isRental() ? $this->rentalSnapshot($business) : null,
             ],
         ]);
+    }
+
+    /** What the business has paid Vizit, and its latest invoices with their payment attempts. */
+    private function billingSnapshot(Business $business): array
+    {
+        $invoices = \App\Models\Invoice::query()->withoutGlobalScopes()->where('business_id', $business->id);
+
+        return [
+            'paid_total' => (int) (clone $invoices)->where('status', 'approved')->sum('amount'),
+            'pending_total' => (int) (clone $invoices)->where('status', 'pending')->sum('amount'),
+            'billing_status' => $business->billing_status,
+            'invoices' => (clone $invoices)->with(['plan:id,name,code', 'paymentTransactions' => fn ($q) => $q->latest('id')])
+                ->orderByDesc('id')->limit(10)->get()->map(fn ($invoice) => [
+                    'id' => $invoice->id, 'status' => $invoice->status, 'amount' => (int) $invoice->amount,
+                    'billing_cycle' => $invoice->billing_cycle ?: 'monthly', 'payment_method' => $invoice->payment_method,
+                    'plan' => $invoice->plan?->name, 'created_at' => optional($invoice->created_at)->toISOString(),
+                    'paid_at' => optional($invoice->paid_at)->toISOString(),
+                    'transaction' => ($tx = $invoice->paymentTransactions->first()) ? [
+                        'reference' => $tx->provider_transaction_id, 'status' => $tx->status, 'provider' => $tx->provider,
+                        'requires_manual_review' => $tx->requires_manual_review,
+                    ] : null,
+                ])->values(),
+        ];
+    }
+
+    private function rentalSnapshot(Business $business): array
+    {
+        $rentals = app(\App\Services\RentalBookingService::class);
+        $active = $business->bookings()->whereNotIn('status', ['cancelled', 'no_show']);
+
+        return [
+            'hourly_price' => $business->rental_hourly_price,
+            'min_minutes' => $business->rental_min_minutes,
+            'max_minutes' => $business->rental_max_minutes,
+            'buffer_minutes' => $business->rental_buffer_minutes,
+            'allow_overnight' => (bool) $business->rental_allow_overnight,
+            'duration_discounts' => $rentals->durationDiscounts($business),
+            'gallery_count' => $business->gallery()->count(),
+            'bookings_total' => (clone $active)->count(),
+            'bookings_upcoming' => (clone $active)->where('starts_at', '>', now())->count(),
+            'booked_amount' => (int) (clone $active)->sum('final_price'),
+            'last_booking_at' => optional((clone $active)->latest('starts_at')->first(['starts_at'])?->starts_at)->toISOString(),
+        ];
     }
 
 
@@ -248,6 +298,27 @@ class BusinessManagementController extends Controller
     {
         $location = $business->primaryLocation ?: $business->locations->first();
         return $location ? $this->serializeLocation($location) : null;
+    }
+
+    public function purgePreview(Business $business, \App\Services\BusinessPurgeService $purger)
+    {
+        return response()->json(['data' => $purger->preview($business)]);
+    }
+
+    /** Permanent deletion of a test business. The admin must retype the slug. */
+    public function purge(Business $business, Request $request, \App\Services\BusinessPurgeService $purger)
+    {
+        $request->validate(['confirm_slug' => ['required', 'string', 'in:'.$business->slug]], [
+            'confirm_slug.in' => 'Հաստատման համար ճիշտ գրիր բիզնեսի slug-ը։',
+        ]);
+        $summary = $purger->purge($business);
+        AdminLog::create([
+            'admin_id' => $request->user()->id, 'action' => 'purge_business', 'model_type' => Business::class,
+            'model_id' => $summary['business']['id'], 'old_values' => $summary, 'ip_address' => $request->ip(),
+            'user_agent' => substr((string) $request->userAgent(), 0, 255),
+        ]);
+
+        return response()->json(['data' => $summary]);
     }
 
     public function suspend(Business $business, Request $request)
