@@ -82,6 +82,7 @@ Route::get('/media/file/{path}', [MediaController::class, 'show'])
 */
 Route::prefix('v1/public')->group(function () {
     Route::get('/categories', [PublicCategoryController::class, 'index']);
+    Route::post('/analytics/events', [\App\Http\Controllers\Api\Public\SiteAnalyticsController::class, 'store'])->middleware('throttle:120,1');
     Route::get('/businesses', [PublicBookingController::class, 'index']);
     Route::get('/businesses/map', [PublicBookingController::class, 'map']);
     Route::get('/businesses/{slug}', [PublicBookingController::class, 'business']);
@@ -576,6 +577,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
 
     Route::get('/dashboard', [AdminDashboardController::class, 'index'])->middleware('admin:super_admin');
     Route::get('/system', \App\Http\Controllers\Admin\SystemStatusController::class)->middleware('admin:super_admin');
+    Route::get('/site-analytics', [\App\Http\Controllers\Admin\SiteAnalyticsController::class, 'index'])->middleware('admin:super_admin');
     Route::get('/analytics', [AdminDashboardController::class, 'analytics'])->middleware('admin:super_admin');
 
     Route::get('/businesses', [BusinessManagementController::class, 'index']);

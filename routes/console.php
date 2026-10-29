@@ -20,3 +20,5 @@ Schedule::command('marketing:dispatch-due')
     ->withoutOverlapping()
     ->runInBackground()
     ->onOneServer();
+
+Schedule::command('vizit:prune-site-events')->dailyAt('04:10')->onOneServer();
