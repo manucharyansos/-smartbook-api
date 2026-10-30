@@ -20,7 +20,7 @@ class BusinessManagementController extends Controller
 
     public function index(Request $request)
     {
-        $query = Business::with(['primaryLocation', 'category'])
+        $query = Business::with(['primaryLocation', 'category', 'subscription.plan', 'owner'])
             ->withCount(['users', 'bookings', 'locations'])
             ->withSum('bookings as total_revenue', 'final_price');
 
@@ -53,7 +53,31 @@ class BusinessManagementController extends Controller
             });
         }
 
-        $businesses = $query->paginate(max(1, min(100, $request->integer('per_page', 20))));
+        // Newest first, so a business that just signed up is on the first page.
+        $businesses = $query->latest('id')->paginate(max(1, min(100, $request->integer('per_page', 20))));
+
+        $businesses->getCollection()->transform(function (Business $business) {
+            $sub = $business->subscription;
+            $owner = $business->owner;
+
+            $business->setAttribute('owner_summary', $owner ? [
+                'id' => $owner->id,
+                'name' => $owner->name,
+                'email' => $owner->email,
+                'phone' => $owner->phone,
+            ] : null);
+            $business->setAttribute('subscription_summary', $sub ? [
+                'status' => $sub->computedStatus(),
+                'billing_cycle' => $sub->billing_cycle,
+                'trial_ends_at' => optional($sub->trial_ends_at)->toISOString(),
+                'current_period_ends_at' => optional($sub->current_period_ends_at)->toISOString(),
+                'plan' => $sub->plan ? ['id' => $sub->plan->id, 'code' => $sub->plan->code, 'name' => $sub->plan->name] : null,
+            ] : null);
+            $business->unsetRelation('subscription');
+            $business->unsetRelation('owner');
+
+            return $business;
+        });
 
         return response()->json([
             'success' => true,
@@ -111,7 +135,7 @@ class BusinessManagementController extends Controller
         $pricingOverrides = $business->pricingOverrides
             ->sortByDesc('id')
             ->map(function (BusinessPricingOverride $override) use ($business) {
-                $resolved = $override->plan ? $this->pricingResolver->resolve($business, $override->plan, 'monthly') : null;
+                $preview = $override->plan ? $this->pricingResolver->previewOverride($business, $override) : null;
 
                 return [
                     'id' => $override->id,
@@ -124,8 +148,8 @@ class BusinessManagementController extends Controller
                     'title' => 'Անհատական առաջարկ',
                     'custom_monthly_price' => $override->custom_monthly_price,
                     'custom_yearly_price' => $override->custom_yearly_price,
-                    'effective_monthly_price' => $resolved['effective_monthly_price'] ?? $override->custom_monthly_price,
-                    'effective_yearly_price' => $resolved['effective_yearly_price'] ?? $override->custom_yearly_price,
+                    'effective_monthly_price' => $preview['monthly'] ?? $override->custom_monthly_price,
+                    'effective_yearly_price' => $preview['yearly'] ?? $override->custom_yearly_price,
                     'discount_type' => $override->discount_type,
                     'discount_value' => $override->discount_value,
                     'billing_cycles_limit' => $override->billing_cycles_limit,
@@ -136,6 +160,7 @@ class BusinessManagementController extends Controller
                     'note' => $override->note,
                     'is_active' => $override->is_active,
                     'is_currently_active' => $override->isCurrentlyActive(),
+                    'state' => $override->state(),
                     'created_at' => optional($override->created_at)->toISOString(),
                     'creator' => $override->creator ? [
                         'id' => $override->creator->id,
@@ -434,6 +459,9 @@ class BusinessManagementController extends Controller
             'is_active' => ['nullable', 'boolean'],
         ]);
 
+        $data = $this->normalizeOverrideDates($data);
+        $this->ensureOverrideHasPrice(Plan::findOrFail($data['plan_id']), $data);
+
         $override = BusinessPricingOverride::create([
             'business_id' => $business->id,
             'plan_id' => $data['plan_id'],
@@ -481,6 +509,12 @@ class BusinessManagementController extends Controller
             'is_active' => ['nullable', 'boolean'],
         ]);
 
+        $data = $this->normalizeOverrideDates($data);
+        $merged = array_merge($override->only([
+            'plan_id', 'custom_monthly_price', 'custom_yearly_price', 'discount_type', 'discount_value',
+        ]), $data);
+        $this->ensureOverrideHasPrice(Plan::findOrFail($merged['plan_id']), $merged);
+
         $override->update($data);
 
         AdminLog::create([
@@ -513,5 +547,46 @@ class BusinessManagementController extends Controller
         ]);
 
         return response()->json(['message' => 'Pricing override deleted successfully']);
+    }
+
+    /**
+     * A date-only end means "through that whole day", not its first second.
+     */
+    private function normalizeOverrideDates(array $data): array
+    {
+        if (!empty($data['ends_at']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $data['ends_at'])) {
+            $data['ends_at'] = \Illuminate\Support\Carbon::parse($data['ends_at'])->endOfDay();
+        }
+
+        return $data;
+    }
+
+    /**
+     * Refuse an offer that would bill 0 ֏ by mistake, e.g. the Custom plan (base price 0)
+     * saved without its own monthly price. Free time is given with extra trial days instead.
+     */
+    private function ensureOverrideHasPrice(Plan $plan, array $data): void
+    {
+        if (($data['discount_type'] ?? null) === 'extra_trial_days') {
+            return;
+        }
+
+        $monthly = isset($data['custom_monthly_price']) && $data['custom_monthly_price'] !== null
+            ? (int) $data['custom_monthly_price']
+            : $plan->monthlyPrice();
+
+        if (($data['discount_type'] ?? null) === 'percent') {
+            $monthly = (int) round($monthly * (1 - min(100, (float) ($data['discount_value'] ?? 0)) / 100));
+        } elseif (($data['discount_type'] ?? null) === 'fixed') {
+            $monthly -= (int) ($data['discount_value'] ?? 0);
+        }
+
+        if ($monthly <= 0) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'custom_monthly_price' => $plan->monthlyPrice() <= 0
+                    ? 'Այս պլանի բազային գինը 0 է։ Նշեք ամսական գինը։'
+                    : 'Առաջարկի ամսական գինը 0 ֏ է ստացվում։ Ստուգեք գինը կամ զեղչը։',
+            ]);
+        }
     }
 }

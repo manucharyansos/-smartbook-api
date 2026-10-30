@@ -112,6 +112,28 @@ class BillingMeController extends Controller
             })
             ->values();
 
+        $upcomingOffers = $this->pricingResolver
+            ->upcomingOverridesForBusiness($business)
+            ->map(function ($override) use ($business) {
+                $resolved = $this->pricingResolver->previewOverride($business, $override);
+
+                return [
+                    'id' => $override->id,
+                    'title' => 'Անհատական առաջարկ',
+                    'base_plan' => [
+                        'id' => $override->plan->id,
+                        'code' => $override->plan->code,
+                        'name' => $override->plan->name,
+                    ],
+                    'effective_monthly_price' => $resolved['monthly'],
+                    'effective_yearly_price' => $resolved['yearly'],
+                    'starts_at' => optional($override->starts_at)->toISOString(),
+                    'ends_at' => optional($override->ends_at)->toISOString(),
+                    'note' => $override->note,
+                ];
+            })
+            ->values();
+
         $paymentProvider = BillingPaymentProviders::status();
 
         return response()->json([
@@ -144,6 +166,7 @@ class BillingMeController extends Controller
                 'payment_provider' => $paymentProvider,
                 'pricing' => $pricing,
                 'individual_offers' => $individualOffers,
+                'upcoming_offers' => $upcomingOffers,
                 'subscription' => $sub ? [
                     'status' => $sub->computedStatus(),
                     'trial_ends_at' => $sub->trial_ends_at,

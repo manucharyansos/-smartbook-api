@@ -374,22 +374,34 @@ class AdminAnalyticsController extends Controller
         $businessTypeExpression = "CASE WHEN COALESCE(NULLIF(vertical, ''), business_type) = 'rentals' THEN 'rentals' WHEN COALESCE(NULLIF(vertical, ''), business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
         $bookingBusinessTypeExpression = "CASE WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) = 'rentals' THEN 'rentals' WHEN COALESCE(NULLIF(businesses.vertical, ''), businesses.business_type) IN ('healthcare', 'medical', 'clinic', 'dental', 'doctor', 'health') THEN 'healthcare' ELSE 'services' END";
 
-        $businessRows = Business::query()
-            ->selectRaw("{$businessTypeExpression} as business_type, COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active")
-            ->when($businessId, fn($q) => $q->where('id', $businessId))
-            ->groupByRaw($businessTypeExpression)
-            ->get()
-            ->keyBy('business_type');
+        // Classify in a subquery and group the outer query by its column.
+        // Grouping by the CASE expression itself fails on MySQL ONLY_FULL_GROUP_BY,
+        // because the alias "business_type" shadows the real column inside GROUP BY.
+        $businessBase = Business::query()
+            ->toBase()
+            ->selectRaw("{$businessTypeExpression} as mix_type, status")
+            ->when($businessId, fn($q) => $q->where('id', $businessId));
 
-        $revenueRows = Booking::query()
+        $businessRows = DB::query()
+            ->fromSub($businessBase, 'business_mix')
+            ->selectRaw("mix_type, COUNT(*) as total, SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active")
+            ->groupBy('mix_type')
+            ->get()
+            ->keyBy('mix_type');
+
+        $revenueBase = DB::table('bookings')
             ->join('businesses', 'businesses.id', '=', 'bookings.business_id')
             ->whereIn('bookings.status', $this->paidStatuses)
             ->whereBetween('bookings.starts_at', [$start, $end])
             ->when($businessId, fn($q) => $q->where('bookings.business_id', $businessId))
-            ->selectRaw("{$bookingBusinessTypeExpression} as business_type, COUNT(bookings.id) as bookings_count, SUM(bookings.final_price) as revenue")
-            ->groupByRaw($bookingBusinessTypeExpression)
+            ->selectRaw("{$bookingBusinessTypeExpression} as mix_type, bookings.id as booking_id, bookings.final_price");
+
+        $revenueRows = DB::query()
+            ->fromSub($revenueBase, 'booking_mix')
+            ->selectRaw('mix_type, COUNT(booking_id) as bookings_count, SUM(final_price) as revenue')
+            ->groupBy('mix_type')
             ->get()
-            ->keyBy('business_type');
+            ->keyBy('mix_type');
 
         return collect($businessRows->keys()->merge($revenueRows->keys())->unique()->values())
             ->map(function ($type) use ($businessRows, $revenueRows) {

@@ -55,6 +55,19 @@ class BusinessPricingOverride extends Model
         return true;
     }
 
+    /**
+     * Why the offer is or is not usable right now:
+     * active, scheduled (starts later), expired, disabled, used_up (no billing cycles left).
+     */
+    public function state(): string
+    {
+        if (!$this->is_active) return 'disabled';
+        if ($this->starts_at && now()->lt($this->starts_at)) return 'scheduled';
+        if ($this->ends_at && now()->gt($this->ends_at)) return 'expired';
+        if (!$this->hasRemainingBillingCycles()) return 'used_up';
+        return 'active';
+    }
+
     public function usedBillingCycles(): int
     {
         if (!$this->id || !$this->business_id || !$this->plan_id) {

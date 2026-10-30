@@ -34,6 +34,25 @@ class BusinessPricingResolver
             ->values();
     }
 
+    /**
+     * Enabled offers whose start date is still ahead, so the business can see them before they apply.
+     */
+    public function upcomingOverridesForBusiness(Business $business): Collection
+    {
+        return BusinessPricingOverride::query()
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->where('starts_at', '>', now())
+            ->where(function ($q) {
+                $q->whereNull('ends_at')->orWhere('ends_at', '>=', now());
+            })
+            ->with('plan')
+            ->orderBy('starts_at')
+            ->get()
+            ->filter(fn (BusinessPricingOverride $override) => $override->plan)
+            ->values();
+    }
+
     public function resolve(Business $business, Plan $plan, string $billingCycle = 'monthly'): array
     {
         $billingCycle = $billingCycle === 'yearly' ? 'yearly' : 'monthly';
@@ -43,6 +62,29 @@ class BusinessPricingResolver
         $baseAmount = $billingCycle === 'yearly' ? $baseYearly : $baseMonthly;
 
         $override = $this->activeOverride($business, $plan);
+
+        return $this->priceWith($plan, $override, $billingCycle);
+    }
+
+    /**
+     * Prices a specific offer as if it applied now (used to show scheduled offers with their real price).
+     */
+    public function previewOverride(Business $business, BusinessPricingOverride $override): array
+    {
+        $resolved = $this->priceWith($override->plan, $override, 'monthly');
+
+        return [
+            'monthly' => $resolved['effective_monthly_price'],
+            'yearly' => $resolved['effective_yearly_price'],
+            'discount_amount' => $resolved['discount_amount'],
+        ];
+    }
+
+    private function priceWith(Plan $plan, ?BusinessPricingOverride $override, string $billingCycle): array
+    {
+        $baseMonthly = $plan->monthlyPrice();
+        $baseYearly = $plan->yearlyPrice();
+        $baseAmount = $billingCycle === 'yearly' ? $baseYearly : $baseMonthly;
 
         $effectiveMonthly = $baseMonthly;
         $effectiveYearly = $baseYearly;
