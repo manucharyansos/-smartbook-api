@@ -53,6 +53,11 @@ class BusinessSettingsController extends Controller
             'custom_category_name' => ['nullable', 'string', 'max:120'],
             'short_description' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:10000'],
+            'text_translations' => ['nullable', 'array'],
+            'text_translations.short_description' => ['nullable', 'array'],
+            'text_translations.short_description.*' => ['nullable', 'string', 'max:255'],
+            'text_translations.description' => ['nullable', 'array'],
+            'text_translations.description.*' => ['nullable', 'string', 'max:10000'],
             'logo_url' => ['nullable', 'string', 'max:2048'],
             'cover_url' => ['nullable', 'string', 'max:2048'],
             'timezone' => ['nullable', 'string', 'max:60', Rule::in(timezone_identifiers_list())],
@@ -123,6 +128,22 @@ class BusinessSettingsController extends Controller
         }
         if (Schema::hasColumn('businesses', 'is_marketplace_visible')) {
             $updates['is_marketplace_visible'] = $marketplaceVisible;
+        }
+
+        // Only the fields and languages that were sent change; an empty value removes that version.
+        if (array_key_exists('text_translations', $data) && Schema::hasColumn('businesses', 'text_translations')) {
+            $translations = $business->textTranslations();
+            foreach (array_keys(Business::TRANSLATABLE_TEXTS) as $field) {
+                if (!is_array($data['text_translations'][$field] ?? null)) continue;
+                foreach (Business::TEXT_LOCALES as $locale) {
+                    if (!array_key_exists($locale, $data['text_translations'][$field])) continue;
+                    $value = trim((string) ($data['text_translations'][$field][$locale] ?? ''));
+                    if ($value === '') unset($translations[$field][$locale]);
+                    else $translations[$field][$locale] = $value;
+                }
+                if (empty($translations[$field])) unset($translations[$field]);
+            }
+            $updates['text_translations'] = $translations ?: null;
         }
 
         if ($business->isRental()) { $updates['show_staff'] = false; $updates['show_services'] = false; }
@@ -417,6 +438,7 @@ class BusinessSettingsController extends Controller
             'address' => $business->address,
             'short_description' => $business->short_description,
             'description' => $business->description,
+            'text_translations' => (object) $business->textTranslations(),
             'logo_url' => $business->logo_url,
             'cover_url' => $business->cover_url,
             'timezone' => $business->effectiveTimezone(),

@@ -24,6 +24,7 @@ class Business extends Model
         'address',
         'short_description',
         'description',
+        'text_translations',
         'logo_url',
         'cover_url',
         'instagram_url',
@@ -57,6 +58,7 @@ class Business extends Model
     ];
 
     protected $casts = [
+        'text_translations' => 'array',
         'is_onboarding_completed' => 'boolean',
         'is_public' => 'boolean',
         'is_public_profile_enabled' => 'boolean',
@@ -328,4 +330,27 @@ class Business extends Model
         return MediaUrl::absolute($value);
     }
 
+
+    public const TRANSLATABLE_TEXTS = ['short_description' => 255, 'description' => 10000];
+    public const TEXT_LOCALES = ['hy', 'ru', 'en'];
+
+    /**
+     * Owner-written versions of the profile texts per site language.
+     * The plain column stays the main text shown when a language has no version.
+     */
+    public function textTranslations(): array
+    {
+        $stored = is_array($this->text_translations) ? $this->text_translations : [];
+        $out = [];
+        foreach (array_keys(self::TRANSLATABLE_TEXTS) as $field) {
+            foreach (self::TEXT_LOCALES as $locale) {
+                $value = trim((string) ($stored[$field][$locale] ?? ''));
+                if ($value !== '') {
+                    $out[$field][$locale] = $value;
+                }
+            }
+        }
+
+        return $out;
+    }
 }
