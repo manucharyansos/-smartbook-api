@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\ClientAccount;
 use App\Services\ServiceDiscountService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class ServiceDiscountController extends Controller
 {
@@ -17,7 +18,7 @@ class ServiceDiscountController extends Controller
 
     public function show(Request $request)
     {
-        return response()->json(['data' => $this->discounts->tiers($this->business($request))]);
+        return response()->json(['data' => $this->discounts->settings($this->business($request))]);
     }
 
     public function update(Request $request)
@@ -26,6 +27,8 @@ class ServiceDiscountController extends Controller
         $max = ServiceDiscountService::MAX_TIERS;
         $percent = ServiceDiscountService::MAX_PERCENT;
         $data = $request->validate([
+            'visit_enabled' => ['sometimes', 'boolean'],
+            'bundle_enabled' => ['sometimes', 'boolean'],
             'visit_tiers' => ['present', 'array', "max:{$max}"],
             'visit_tiers.*.min_visits' => ['required', 'integer', 'min:1', 'max:1000', 'distinct'],
             'visit_tiers.*.percent' => ['required', 'integer', 'min:1', "max:{$percent}"],
@@ -33,12 +36,26 @@ class ServiceDiscountController extends Controller
             'bundle_tiers.*.min_services' => ['required', 'integer', 'min:2', 'max:20', 'distinct'],
             'bundle_tiers.*.percent' => ['required', 'integer', 'min:1', "max:{$percent}"],
         ]);
+        $visitEnabled = (bool) ($data['visit_enabled'] ?? true);
+        $bundleEnabled = (bool) ($data['bundle_enabled'] ?? true);
+        $errors = [];
+        if ($visitEnabled && count($data['visit_tiers']) === 0) {
+            $errors['visit_tiers'] = 'Ավելացրեք առնվազն մեկ մակարդակ կամ անջատեք այս զեղչը։';
+        }
+        if ($bundleEnabled && count($data['bundle_tiers']) === 0) {
+            $errors['bundle_tiers'] = 'Ավելացրեք առնվազն մեկ մակարդակ կամ անջատեք այս զեղչը։';
+        }
+        if ($errors) {
+            throw ValidationException::withMessages($errors);
+        }
         $business->update(['service_discounts' => [
+            'visit_enabled' => $visitEnabled,
+            'bundle_enabled' => $bundleEnabled,
             'visit_tiers' => collect($data['visit_tiers'])->map(fn ($t) => ['min_visits' => (int) $t['min_visits'], 'percent' => (int) $t['percent']])->sortBy('min_visits')->values()->all(),
             'bundle_tiers' => collect($data['bundle_tiers'])->map(fn ($t) => ['min_services' => (int) $t['min_services'], 'percent' => (int) $t['percent']])->sortBy('min_services')->values()->all(),
         ]]);
 
-        return response()->json(['data' => $this->discounts->tiers($business->fresh())]);
+        return response()->json(['data' => $this->discounts->settings($business->fresh())]);
     }
 
     /** A signed-in client's visit count and next discount at one business. */

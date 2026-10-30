@@ -22,9 +22,27 @@ class ServiceDiscountService
     /** @return array{visit_tiers: array<int, array{min_visits: int, percent: int}>, bundle_tiers: array<int, array{min_services: int, percent: int}>} */
     public function tiers(Business $business): array
     {
+        $settings = $this->settings($business);
+
+        return [
+            'visit_tiers' => $settings['visit_enabled'] ? $settings['visit_tiers'] : [],
+            'bundle_tiers' => $settings['bundle_enabled'] ? $settings['bundle_tiers'] : [],
+        ];
+    }
+
+    /**
+     * What the owner chose: which discount types are switched on, and every saved
+     * level (kept even while a type is off, so switching back restores them).
+     *
+     * @return array{visit_enabled: bool, bundle_enabled: bool, visit_tiers: array, bundle_tiers: array}
+     */
+    public function settings(Business $business): array
+    {
         $raw = is_array($business->service_discounts) ? $business->service_discounts : [];
 
         return [
+            'visit_enabled' => (bool) ($raw['visit_enabled'] ?? true),
+            'bundle_enabled' => (bool) ($raw['bundle_enabled'] ?? true),
             'visit_tiers' => $this->clean($raw['visit_tiers'] ?? [], 'min_visits', 1, 1000),
             'bundle_tiers' => $this->clean($raw['bundle_tiers'] ?? [], 'min_services', 2, 20),
         ];

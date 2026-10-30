@@ -78,14 +78,22 @@ it('does not count cancelled, no-show or unverified bookings as visits', functio
 it('lets the owner set tiers, shows them publicly and shows a signed-in client their progress', function () {
     $owner = User::factory()->owner($this->business->id)->create();
     Sanctum::actingAs($owner);
-    $this->putJson('/api/business/service-discounts', ['visit_tiers' => [['min_visits' => 4, 'percent' => 6]], 'bundle_tiers' => []])->assertOk()
-        ->assertJsonPath('data.visit_tiers.0.min_visits', 4)->assertJsonPath('data.bundle_tiers', []);
+    $this->putJson('/api/business/service-discounts', ['visit_tiers' => [['min_visits' => 4, 'percent' => 6]], 'bundle_tiers' => []])
+        ->assertUnprocessable()->assertJsonValidationErrors('bundle_tiers');
+    $this->putJson('/api/business/service-discounts', ['visit_enabled' => true, 'bundle_enabled' => false,
+        'visit_tiers' => [['min_visits' => 4, 'percent' => 6]], 'bundle_tiers' => [['min_services' => 3, 'percent' => 12]]])->assertOk()
+        ->assertJsonPath('data.visit_tiers.0.min_visits', 4)->assertJsonPath('data.bundle_enabled', false)
+        ->assertJsonPath('data.bundle_tiers.0.percent', 12);
     $this->putJson('/api/business/service-discounts', ['visit_tiers' => [['min_visits' => 4, 'percent' => 95]], 'bundle_tiers' => []])->assertUnprocessable();
     $this->putJson('/api/business/service-discounts', ['visit_tiers' => [], 'bundle_tiers' => [['min_services' => 1, 'percent' => 5]]])->assertUnprocessable();
     Sanctum::actingAs(User::factory()->staff($this->business->id)->create());
     $this->putJson('/api/business/service-discounts', ['visit_tiers' => [], 'bundle_tiers' => []])->assertForbidden();
 
-    $this->getJson('/api/public/businesses/discount-salon')->assertOk()->assertJsonPath('service_discounts.visit_tiers.0.percent', 6);
+    // A switched-off type keeps its levels for the owner but is hidden and not applied.
+    $this->getJson('/api/public/businesses/discount-salon')->assertOk()->assertJsonPath('service_discounts.visit_tiers.0.percent', 6)
+        ->assertJsonPath('service_discounts.bundle_tiers', []);
+    $this->postJson('/api/public/businesses/discount-salon/bookings/multi', discountPayload(['service_ids' => [$this->cut->id, $this->color->id]]))
+        ->assertCreated()->assertJsonPath('data.discount.percent', 0);
 
     $account = ClientAccount::create(['name' => 'Ani', 'email' => 'ani@example.com', 'phone' => '+37499111222', 'password' => 'secret-pass-1', 'email_verified_at' => now()]);
     $client = pastVisits(2);
