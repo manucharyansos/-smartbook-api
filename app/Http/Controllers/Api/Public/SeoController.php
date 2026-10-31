@@ -93,6 +93,8 @@ class SeoController extends Controller
             ['loc' => $base . '/privacy-policy', 'priority' => '0.4'],
             ['loc' => $base . '/terms', 'priority' => '0.4'],
             ['loc' => $base . '/cookies', 'priority' => '0.4'],
+            ['loc' => $base . '/refund-policy', 'priority' => '0.4'],
+            ['loc' => $base . '/personal-data', 'priority' => '0.4'],
         ];
 
         $businesses = Business::query()
@@ -250,6 +252,9 @@ class SeoController extends Controller
             '/privacy-policy' => ['title' => 'Գաղտնիության քաղաքականություն | Vizit', 'description' => 'Կարդացեք Vizit-ի գաղտնիության քաղաքականությունը։'],
             '/terms' => ['title' => 'Օգտագործման պայմաններ | Vizit', 'description' => 'Կարդացեք Vizit հարթակի օգտագործման պայմանները։'],
             '/cookies' => ['title' => 'Cookie-ների քաղաքականություն | Vizit', 'description' => 'Իմացեք, թե ինչպես է Vizit-ը օգտագործում cookie-ները։'],
+            // Card-payment providers review these pages, so they must not answer 404.
+            '/refund-policy' => ['title' => 'Չեղարկման և վերադարձի քաղաքականություն | Vizit', 'description' => 'Vizit-ի պլանների չեղարկման, փորձաշրջանի և գումարի վերադարձի պայմանները։'],
+            '/personal-data' => ['title' => 'Անձնական տվյալների մշակման քաղաքականություն | Vizit', 'description' => 'Ինչպես է Vizit-ը մշակում և պաշտպանում անձնական տվյալները։'],
         ];
 
         foreach (['/login', '/register', '/forgot-password', '/reset-password', '/business/login', '/business/register', '/client/', '/admin', '/app', '/payment-return', '/auth/', '/mock-bank'] as $prefix) {
@@ -297,7 +302,9 @@ class SeoController extends Controller
 
     private function defaultImage(): string
     {
-        return $this->frontendBaseUrl() . '/og-default.svg';
+        // Facebook, Telegram and WhatsApp previews need a raster image, and
+        // the frontend only ships og-default.png (the .svg answered 404).
+        return $this->frontendBaseUrl() . '/og-default.png';
     }
 
     private function absolutePublicImage(?string $value): string
