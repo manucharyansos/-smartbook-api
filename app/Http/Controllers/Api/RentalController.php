@@ -211,6 +211,10 @@ class RentalController extends Controller
             'currency' => 'AMD', 'monthly_subscription' => $business->subscription?->plan?->monthlyPrice(),
             'daily' => $active->groupBy(fn ($item) => $item->starts_at->copy()->timezone($timezone)->toDateString())
                 ->map(fn ($group, $date) => ['date' => $date, 'count' => $group->count(), 'amount' => (int) $group->sum('final_price')])->values(),
+            // Where the counted bookings came from (?source= on public links, "manual" for owner-made ones).
+            'by_source' => $active->groupBy(fn ($item) => (string) $item->source)
+                ->map(fn ($group, $source) => ['source' => $source !== '' ? $source : null, 'count' => $group->count(), 'amount' => (int) $group->sum('final_price')])
+                ->sortBy([['count', 'desc'], ['amount', 'desc']])->values(),
         ]]);
     }
 
@@ -229,6 +233,7 @@ class RentalController extends Controller
         return [
             'id' => $booking->id, 'booking_code' => $booking->booking_code, 'client_name' => $booking->client_name,
             'client_phone' => $booking->client_phone, 'client_email' => $booking->client_email, 'notes' => $booking->notes,
+            'source' => $booking->source,
             'starts_at' => $booking->starts_at->toISOString(), 'ends_at' => $booking->ends_at->toISOString(),
             'status' => $booking->status, 'final_price' => (int) $booking->final_price, 'paid_amount' => $balance,
             'outstanding_amount' => max(0, (int) $booking->final_price - $balance), 'currency' => $booking->currency,
