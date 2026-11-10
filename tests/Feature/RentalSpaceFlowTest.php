@@ -299,6 +299,26 @@ it('isolates rental bookings and financial records from other businesses', funct
     $this->getJson('/api/rental/bookings?from=2026-10-27&to=2026-10-27')->assertOk()->assertJsonCount(0, 'data');
 });
 
+it('shows the owner where each rental booking came from', function () {
+    $rentals = app(RentalBookingService::class);
+    $rentals->create($this->rental, $this->rentalData, ['source' => 'instagram']);
+    $rentals->create($this->rental, [...$this->rentalData, 'starts_at' => '2026-10-27 14:00'], ['source' => 'instagram']);
+    $website = $rentals->create($this->rental, [...$this->rentalData, 'starts_at' => '2026-10-27 16:00']);
+    $this->actingAs($this->owner)->postJson('/api/rental/bookings', [...$this->rentalData, 'starts_at' => '2026-10-27 09:00', 'duration_minutes' => 60])
+        ->assertCreated()->assertJsonPath('data.source', 'manual');
+    $this->getJson('/api/rental/bookings?from=2026-10-27&to=2026-10-27')->assertOk()
+        ->assertJsonPath('data.*.source', ['manual', 'instagram', 'instagram', 'website']);
+    $this->getJson('/api/rental/summary?from=2026-10-27&to=2026-10-27')->assertOk()->assertJsonPath('data.by_source', [
+        ['source' => 'instagram', 'count' => 2, 'amount' => 6000],
+        ['source' => 'website', 'count' => 1, 'amount' => 3000],
+        ['source' => 'manual', 'count' => 1, 'amount' => 2000],
+    ]);
+    // Like bookings_count, the breakdown leaves out cancelled bookings.
+    $this->patchJson('/api/rental/bookings/'.$website->id, ['status' => 'cancelled'])->assertOk();
+    $this->getJson('/api/rental/summary?from=2026-10-27&to=2026-10-27')->assertOk()
+        ->assertJsonPath('data.bookings_count', 3)->assertJsonPath('data.by_source.*.source', ['instagram', 'manual']);
+});
+
 it('rejects inactive rentals and cannot convert another business to bypass its plan', function () {
     $this->actingAs($this->owner)->patchJson('/api/business/settings', ['vertical' => 'services'])->assertUnprocessable();
     $this->rental->subscription->update(['status' => 'expired']);
