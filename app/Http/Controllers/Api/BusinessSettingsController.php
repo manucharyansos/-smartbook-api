@@ -46,6 +46,7 @@ class BusinessSettingsController extends Controller
         }
 
         $data = $request->validate([
+            'name' => ['sometimes', 'required', 'string', 'max:255'],
             'phone' => ['nullable', 'string', 'max:40'],
             'address' => ['nullable', 'string', 'max:255'],
             'vertical' => ['nullable', 'string', Rule::in(BusinessVertical::values())],
@@ -88,6 +89,7 @@ class BusinessSettingsController extends Controller
         }
 
         $updates = [
+            'name' => $data['name'] ?? $business->name,
             'business_type' => $nextVertical,
             'vertical' => $nextVertical,
             'business_category_id' => array_key_exists('business_category_id', $data) ? $data['business_category_id'] : $business->business_category_id,
