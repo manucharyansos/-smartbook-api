@@ -29,7 +29,7 @@ class BusinessPricingResolver
             ->with('plan')
             ->latest('id')
             ->get()
-            ->filter(fn (BusinessPricingOverride $override) => $override->isCurrentlyActive())
+            ->filter(fn (BusinessPricingOverride $override) => $override->isCurrentlyActive() && $this->fitsBusiness($business, $override))
             ->unique('plan_id')
             ->values();
     }
@@ -49,8 +49,18 @@ class BusinessPricingResolver
             ->with('plan')
             ->orderBy('starts_at')
             ->get()
-            ->filter(fn (BusinessPricingOverride $override) => $override->plan)
+            ->filter(fn (BusinessPricingOverride $override) => $this->fitsBusiness($business, $override))
             ->values();
+    }
+
+    /**
+     * An offer on another area's plan (e.g. a healthcare plan for a services business) can never
+     * be bought by this business, so it is not shown or applied.
+     */
+    private function fitsBusiness(Business $business, BusinessPricingOverride $override): bool
+    {
+        return $override->plan !== null
+            && $override->plan->supportsBusinessType((string) $business->business_type);
     }
 
     public function resolve(Business $business, Plan $plan, string $billingCycle = 'monthly'): array

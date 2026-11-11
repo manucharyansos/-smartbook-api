@@ -55,5 +55,6 @@ it('supports more than one rental plan and never sells it to staff-based busines
         ->assertJsonPath('data.amount', 480000);
     $salon = Business::factory()->onboardingCompleted()->create();
     Sanctum::actingAs(User::factory()->create(['business_id' => $salon->id, 'role' => 'owner']));
-    $this->postJson('/api/billing/upgrade-request', ['plan_code' => 'hall-large'])->assertNotFound();
+    $this->postJson('/api/billing/upgrade-request', ['plan_code' => 'hall-large'])->assertUnprocessable()
+        ->assertJsonPath('code', 'plan_not_available_for_business_type');
 });

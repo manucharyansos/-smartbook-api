@@ -129,6 +129,9 @@ class BusinessManagementController extends Controller
                 'currency' => $item->currency,
                 'staff_limit' => $item->staffLimit(),
                 'locations' => $item->locations,
+                'audience' => $item->audience(),
+                // Offers may only use plans this business's area can buy.
+                'fits_business' => $item->supportsBusinessType((string) $business->business_type),
             ])
             ->values();
 
@@ -161,6 +164,8 @@ class BusinessManagementController extends Controller
                     'is_active' => $override->is_active,
                     'is_currently_active' => $override->isCurrentlyActive(),
                     'state' => $override->state(),
+                    // false: the business never sees this offer (its plan belongs to another area).
+                    'fits_business' => $override->plan ? $override->plan->supportsBusinessType((string) $business->business_type) : false,
                     'created_at' => optional($override->created_at)->toISOString(),
                     'creator' => $override->creator ? [
                         'id' => $override->creator->id,
@@ -460,7 +465,9 @@ class BusinessManagementController extends Controller
         ]);
 
         $data = $this->normalizeOverrideDates($data);
-        $this->ensureOverrideHasPrice(Plan::findOrFail($data['plan_id']), $data);
+        $plan = Plan::findOrFail($data['plan_id']);
+        $this->ensurePlanFitsBusiness($plan, $business);
+        $this->ensureOverrideHasPrice($plan, $data);
 
         $override = BusinessPricingOverride::create([
             'business_id' => $business->id,
@@ -513,7 +520,12 @@ class BusinessManagementController extends Controller
         $merged = array_merge($override->only([
             'plan_id', 'custom_monthly_price', 'custom_yearly_price', 'discount_type', 'discount_value',
         ]), $data);
-        $this->ensureOverrideHasPrice(Plan::findOrFail($merged['plan_id']), $merged);
+        $plan = Plan::findOrFail($merged['plan_id']);
+        // Only a changed plan is checked, so an old offer can still be switched off or re-dated.
+        if (array_key_exists('plan_id', $data)) {
+            $this->ensurePlanFitsBusiness($plan, $business);
+        }
+        $this->ensureOverrideHasPrice($plan, $merged);
 
         $override->update($data);
 
@@ -588,5 +600,20 @@ class BusinessManagementController extends Controller
                     : 'Առաջարկի ամսական գինը 0 ֏ է ստացվում։ Ստուգեք գինը կամ զեղչը։',
             ]);
         }
+    }
+
+    /**
+     * An offer on another area's plan (e.g. a healthcare plan for a services business) is never
+     * shown to the business and its upgrade request is refused, so do not let it be saved.
+     */
+    private function ensurePlanFitsBusiness(Plan $plan, Business $business): void
+    {
+        if ($plan->supportsBusinessType((string) $business->business_type)) {
+            return;
+        }
+
+        throw \Illuminate\Validation\ValidationException::withMessages([
+            'plan_id' => "«{$plan->name}» պլանը նախատեսված չէ այս բիզնեսի տեսակի համար։ Ընտրեք նրա տեսակի պլան կամ Custom։",
+        ]);
     }
 }

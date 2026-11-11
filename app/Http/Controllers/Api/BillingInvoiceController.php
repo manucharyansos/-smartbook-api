@@ -67,7 +67,10 @@ class BillingInvoiceController extends Controller
         }
 
         if (!$plan->supportsBusinessType((string) $business->business_type)) {
-            abort(404);
+            return response()->json([
+                'message' => 'Այս պլանը հասանելի չէ ձեր բիզնեսի տեսակի համար։ Ընտրեք այլ պլան կամ կապվեք Vizit-ի հետ։',
+                'code' => 'plan_not_available_for_business_type',
+            ], 422);
         }
 
         $pricing = $this->pricingResolver->resolve($business, $plan, $billingCycle);
