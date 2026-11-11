@@ -88,6 +88,8 @@ class BusinessSettingsController extends Controller
             throw \Illuminate\Validation\ValidationException::withMessages(['vertical' => 'Տարածքի համար ստեղծեք առանձին բիզնես։']);
         }
 
+        $nameChanged = array_key_exists('name', $data) && $data['name'] !== $business->name;
+
         $updates = [
             'name' => $data['name'] ?? $business->name,
             'business_type' => $nextVertical,
@@ -150,6 +152,12 @@ class BusinessSettingsController extends Controller
 
         if ($business->isRental()) { $updates['show_staff'] = false; $updates['show_services'] = false; }
         $business->update($updates);
+
+        // The public link follows the name; the previous link keeps opening the business.
+        // A reserved link (e.g. "test") is replaced on the next save, or the business stays hidden.
+        if ($nameChanged || \App\Support\BusinessSlug::isReserved((string) $business->slug)) {
+            \App\Support\BusinessSlug::follow($business);
+        }
 
         if (array_key_exists('address', $data)) {
             $primary = $business->locations()->where('is_primary', true)->first();

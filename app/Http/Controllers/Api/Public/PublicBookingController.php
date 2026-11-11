@@ -201,7 +201,7 @@ class PublicBookingController extends Controller
 
     private function publicBusinessQuery(string $slug)
     {
-        $query = Business::query()->where('slug', $slug);
+        $query = Business::query()->where('slug', \App\Support\BusinessSlug::resolve($slug));
         $this->applyPublicBusinessExclusions($query);
 
         if ($this->hasColumn('businesses', 'status')) {

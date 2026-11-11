@@ -63,7 +63,7 @@ class ServiceDiscountController extends Controller
     {
         $account = $request->user();
         abort_unless($account instanceof ClientAccount, 401);
-        $business = Business::query()->where('slug', $slug)->firstOrFail();
+        $business = Business::query()->where('slug', \App\Support\BusinessSlug::resolve($slug))->firstOrFail();
         abort_if($business->isRental(), 404);
         $email = $account->hasVerifiedEmail() ? mb_strtolower(trim((string) $account->email)) : null;
         $clients = $email

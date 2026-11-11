@@ -4,14 +4,16 @@ use App\Models\Business;
 use App\Models\User;
 use Laravel\Sanctum\Sanctum;
 
-it('lets business administrators rename only their own business without changing its link', function (string $role) {
+it('lets business administrators rename only their own business; the link follows the name', function (string $role) {
     $business = Business::factory()->billable()->create(['slug' => 'existing-booking-link']);
     $other = Business::factory()->create(['name' => 'Other business']);
     Sanctum::actingAs(User::factory()->create(['business_id' => $business->id, 'role' => $role, 'is_active' => true]));
 
+    // A link cannot be picked freely: it is made from the new name, and the old one keeps working.
     $this->patchJson('/api/business/settings', ['name' => '  Նոր անուն  ', 'business_id' => $other->id, 'slug' => 'changed-link'])
-        ->assertOk()->assertJsonPath('data.name', 'Նոր անուն')->assertJsonPath('data.slug', 'existing-booking-link');
+        ->assertOk()->assertJsonPath('data.name', 'Նոր անուն')->assertJsonPath('data.slug', \Illuminate\Support\Str::slug('Նոր անուն'));
     expect($business->fresh()->name)->toBe('Նոր անուն');
+    expect(\App\Models\BusinessSlugAlias::where('slug', 'existing-booking-link')->value('business_id'))->toBe($business->id);
     expect($other->fresh()->name)->toBe('Other business');
     $this->getJson('/api/business/settings')->assertOk()->assertJsonPath('data.name', 'Նոր անուն');
 })->with(['owner', 'manager']);

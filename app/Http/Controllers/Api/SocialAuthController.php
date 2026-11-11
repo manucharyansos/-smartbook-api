@@ -1067,19 +1067,7 @@ class SocialAuthController extends Controller
 
     private function uniqueBusinessSlug(string $businessName, ?int $ignoreBusinessId = null): string
     {
-        $baseSlug = Str::slug($businessName) ?: 'business';
-        $slug = $baseSlug;
-        $counter = 1;
-
-        while (Business::query()
-            ->where('slug', $slug)
-            ->when($ignoreBusinessId, fn ($query) => $query->where('id', '!=', $ignoreBusinessId))
-            ->exists()) {
-            $counter++;
-            $slug = $baseSlug . '-' . $counter;
-        }
-
-        return $slug;
+        return \App\Support\BusinessSlug::unique($businessName, $ignoreBusinessId);
     }
 
     private function selfServePlan(string $code, string $businessType): ?Plan

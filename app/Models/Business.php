@@ -149,6 +149,11 @@ class Business extends Model
         return $this->hasMany(PaymentTransaction::class);
     }
 
+    public function slugAliases()
+    {
+        return $this->hasMany(BusinessSlugAlias::class);
+    }
+
     public function contactRequests()
     {
         return $this->hasMany(ContactRequest::class);

@@ -32,9 +32,8 @@ class SeoController extends Controller
                 $description = $this->businessDescription($business, $isBooking);
                 $image = $this->absolutePublicImage($business->cover_url ?: $business->logo_url);
 
-                $canonicalUrl = $isBooking
-                    ? $base . '/businesses/' . rawurlencode($business->slug)
-                    : $url;
+                // Always the current link, also when an old one was opened.
+                $canonicalUrl = $base . '/businesses/' . rawurlencode($business->slug);
                 $payload = $this->payload(
                     title: $title,
                     description: $description,
@@ -144,7 +143,7 @@ class SeoController extends Controller
                     ->where('show_in_public_team', true)
                     ->whereIn('role', [User::ROLE_OWNER, User::ROLE_MANAGER, User::ROLE_STAFF]),
             ])
-            ->where('slug', $slug)
+            ->where('slug', \App\Support\BusinessSlug::resolve($slug))
             ->where('status', 'active')
             ->where('is_onboarding_completed', true);
 

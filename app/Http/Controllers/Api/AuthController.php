@@ -239,14 +239,8 @@ class AuthController extends Controller
             : null;
 
         $out = DB::transaction(function () use ($data, $phoneNorm, $fingerprint, $request, $trialDays, $vertical, $businessType, $categoryId, $customCategoryName, $plan) {
-            // unique slug
-            $baseSlug = Str::slug($data['business_name']);
-            $slug = $baseSlug ?: 'business';
-            $i = 1;
-            while (Business::where('slug', $slug)->exists()) {
-                $i++;
-                $slug = ($baseSlug ?: 'business') . '-' . $i;
-            }
+            // Never hands out a reserved address or another business's current or old link.
+            $slug = \App\Support\BusinessSlug::unique((string) $data['business_name']);
 
             $business = Business::create([
                 'name' => $data['business_name'],

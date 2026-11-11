@@ -220,7 +220,7 @@ class WaitlistController extends Controller
     private function publicBusiness(string $slug): Business
     {
         return Business::query()
-            ->where('slug', $slug)
+            ->where('slug', \App\Support\BusinessSlug::resolve($slug))
             ->where('status', 'active')
             ->where('is_onboarding_completed', true)
             ->where('is_public_profile_enabled', true)
