@@ -19,6 +19,9 @@ class BusinessLocation extends Model
         'longitude',
         'phone',
         'working_hours',
+        'amenities',
+        'capacity_people',
+        'area_sqm',
         'is_active',
         'is_primary',
         'sort_order',
@@ -30,6 +33,9 @@ class BusinessLocation extends Model
         'latitude' => 'decimal:7',
         'longitude' => 'decimal:7',
         'working_hours' => 'array',
+        'amenities' => 'array',
+        'capacity_people' => 'integer',
+        'area_sqm' => 'integer',
         'sort_order' => 'integer',
     ];
 

@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpKernel\Exception\HttpException;
+use App\Support\Amenities;
 use App\Support\BusinessVertical;
 
 class BusinessSettingsController extends Controller
@@ -263,10 +264,24 @@ class BusinessSettingsController extends Controller
             'phone' => ['nullable', 'string', 'max:40'],
             'is_primary' => ['nullable', 'boolean'],
             'is_active' => ['nullable', 'boolean'],
+            'amenities' => ['sometimes', 'nullable', 'array', 'max:50'],
+            'amenities.*' => ['string', Rule::in(Amenities::allowedFor($business))],
+            'capacity_people' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.config('amenities.max_capacity_people')],
+            'area_sqm' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.config('amenities.max_area_sqm')],
         ]);
 
         if (!empty($data['is_primary'])) {
             $business->locations()->update(['is_primary' => false]);
+        }
+
+        if (array_key_exists('amenities', $data)) {
+            $location->amenities = Amenities::normalize($business, $data['amenities']);
+        }
+        // Size and capacity describe a rental space; other areas never store them.
+        foreach (['capacity_people', 'area_sqm'] as $field) {
+            if (array_key_exists($field, $data)) {
+                $location->{$field} = $business->isRental() ? $data[$field] : null;
+            }
         }
 
         $location->update([
@@ -480,6 +495,7 @@ class BusinessSettingsController extends Controller
             })->values(),
             'locations' => $locations,
             'location_limit' => $locationLimit,
+            'amenity_options' => Amenities::allowedFor($business),
             'service_limit' => $serviceLimit,
             'plan' => [
                 'code' => $business->subscription?->plan?->code,
@@ -541,6 +557,9 @@ class BusinessSettingsController extends Controller
             'is_primary' => (bool) $location->is_primary,
             'is_active' => (bool) $location->is_active,
             'sort_order' => (int) $location->sort_order,
+            'amenities' => array_values($location->amenities ?? []),
+            'capacity_people' => $location->capacity_people,
+            'area_sqm' => $location->area_sqm,
         ];
     }
 }

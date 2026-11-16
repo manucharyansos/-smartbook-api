@@ -88,6 +88,7 @@ Route::prefix('v1/public')->group(function () {
     Route::get('/businesses/{slug}', [PublicBookingController::class, 'business']);
     Route::get('/businesses/{slug}/services', [PublicBookingController::class, 'services']);
     Route::get('/businesses/{slug}/staff', [PublicBookingController::class, 'staff']);
+    Route::get('/businesses/{slug}/portfolio', [PublicBookingController::class, 'portfolio'])->middleware('throttle:120,1');
     Route::get('/businesses/{slug}/availability', [PublicBookingController::class, 'availability']);
     Route::get('/businesses/{slug}/availability/multi', [PublicBookingController::class, 'availabilityMulti']);
     Route::post('/businesses/{slug}/bookings', [PublicBookingController::class, 'store'])->middleware('throttle:20,1');
@@ -118,6 +119,7 @@ Route::prefix('public')->group(function () {
     Route::get('/businesses/{slug}', [PublicBookingController::class, 'business']);
     Route::get('/businesses/{slug}/services', [PublicBookingController::class, 'services']);
     Route::get('/businesses/{slug}/staff', [PublicBookingController::class, 'staff']);
+    Route::get('/businesses/{slug}/portfolio', [PublicBookingController::class, 'portfolio'])->middleware('throttle:120,1');
     Route::get('/businesses/{slug}/availability', [PublicBookingController::class, 'availability']);
     // Multi-service availability for public bookings
     Route::get('/businesses/{slug}/availability/multi', [PublicBookingController::class, 'availabilityMulti']);
@@ -347,6 +349,13 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
         Route::post('/business/locations', [BusinessSettingsController::class, 'storeLocation'])->name('business.locations.store');
         Route::patch('/business/locations/{location}', [BusinessSettingsController::class, 'updateLocation'])->name('business.locations.update');
         Route::delete('/business/locations/{location}', [BusinessSettingsController::class, 'destroyLocation'])->name('business.locations.destroy');
+
+        // Work photos tagged with a specialist and/or a service.
+        Route::get('/portfolio', [\App\Http\Controllers\Api\PortfolioController::class, 'index'])->name('portfolio.index');
+        Route::post('/portfolio', [\App\Http\Controllers\Api\PortfolioController::class, 'store'])->middleware('throttle:60,1')->name('portfolio.store');
+        Route::put('/portfolio/order', [\App\Http\Controllers\Api\PortfolioController::class, 'reorder'])->name('portfolio.reorder');
+        Route::patch('/portfolio/{media}', [\App\Http\Controllers\Api\PortfolioController::class, 'update'])->whereNumber('media')->name('portfolio.update');
+        Route::delete('/portfolio/{media}', [\App\Http\Controllers\Api\PortfolioController::class, 'destroy'])->whereNumber('media')->name('portfolio.destroy');
     });
 
     /*

@@ -183,7 +183,16 @@ class Business extends Model
 
     public function gallery()
     {
-        return $this->hasMany(BusinessMedia::class)->orderBy('sort_order')->orderBy('id');
+        return $this->hasMany(BusinessMedia::class)
+            ->where('collection', BusinessMedia::COLLECTION_GALLERY)
+            ->orderBy('sort_order')->orderBy('id');
+    }
+
+    public function portfolio()
+    {
+        return $this->hasMany(BusinessMedia::class)
+            ->where('collection', BusinessMedia::COLLECTION_PORTFOLIO)
+            ->orderBy('sort_order')->orderByDesc('id');
     }
 
     public function isHealthcareVertical(): bool

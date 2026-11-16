@@ -8,7 +8,9 @@ use App\Models\Booking;
 use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\BusinessLocation;
+use App\Models\BusinessMedia;
 use App\Models\Client;
+use App\Support\Amenities;
 use App\Models\Room;
 use App\Models\Service;
 use App\Models\User;
@@ -574,6 +576,9 @@ class PublicBookingController extends Controller
                 'lng' => $location->longitude !== null ? (float) $location->longitude : null,
                 'phone' => $location->phone,
                 'is_primary' => (bool) $location->is_primary,
+                'amenities' => Amenities::normalize($business, $location->amenities),
+                'capacity_people' => $business->isRental() ? $location->capacity_people : null,
+                'area_sqm' => $business->isRental() ? $location->area_sqm : null,
             ])->values(),
             'phone' => $business->phone,
             'timezone' => $business->effectiveTimezone(),
@@ -591,6 +596,8 @@ class PublicBookingController extends Controller
             'show_services' => !$business->isRental() && (bool) ($business->show_services ?? true),
             'service_discounts' => $business->isRental() ? null : app(ServiceDiscountService::class)->tiers($business),
             'gallery' => $business->relationLoaded('gallery') ? $business->gallery : [],
+            'portfolio_count' => $business->isRental() ? 0 : $this->publicPortfolioQuery($business)->count(),
+            'portfolio_preview' => $business->isRental() ? [] : $this->serializePublicPortfolio($business, $this->publicPortfolioQuery($business)->limit(12)->get()),
             'rental' => $business->isRental() ? [
                 'hourly_price' => $business->rental_hourly_price, 'currency' => 'AMD',
                 'min_minutes' => $business->rental_min_minutes, 'max_minutes' => $business->rental_max_minutes,
@@ -622,6 +629,8 @@ class PublicBookingController extends Controller
             ->when($request->filled('location_id'), fn ($q) => $this->applyLocationCompatibility($q, (int) $request->integer('location_id')))
             ->orderBy('id')
             ->get($this->filterColumnsForOptionalLocation('services', ['id', 'name', 'description', 'image_url', 'duration_minutes', 'booking_mode', 'capacity', 'price', 'currency', 'is_active', 'location_id']));
+        $counts = $this->portfolioCounts($business, 'service_id');
+        $services->each(fn (Service $service) => $service->setAttribute('portfolio_count', (int) ($counts[$service->id] ?? 0)));
 
         return response()->json([
             'data' => $services,
@@ -642,6 +651,8 @@ class PublicBookingController extends Controller
             ->orderBy('role')
             ->orderBy('name')
             ->get($this->filterColumnsForOptionalLocation('users', ['id', 'name', 'role', 'avatar_url', 'bio', 'is_bookable', 'location_id']));
+        $counts = $this->portfolioCounts($business, 'staff_id');
+        $staff->each(fn (User $member) => $member->setAttribute('portfolio_count', (int) ($counts[$member->id] ?? 0)));
 
         return response()->json([
             'data' => $staff,
@@ -651,6 +662,98 @@ class PublicBookingController extends Controller
                 'bookable_only' => $bookableOnly,
             ],
         ]);
+    }
+
+    /**
+     * GET /api/public/businesses/{slug}/portfolio?staff_id=&service_id=&page=
+     * Work photos; a photo tagged with a specialist and a service shows under both.
+     */
+    public function portfolio(string $slug, Request $request)
+    {
+        $business = $this->publicBusinessQuery($slug)->firstOrFail();
+        $request->validate([
+            'staff_id' => ['nullable', 'integer'],
+            'service_id' => ['nullable', 'integer'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:60'],
+        ]);
+        if ($business->isRental() || !$this->hasColumn('business_media', 'collection')) {
+            return response()->json(['data' => [], 'meta' => ['total' => 0, 'current_page' => 1, 'last_page' => 1]]);
+        }
+
+        $query = $this->publicPortfolioQuery($business);
+        if ($request->filled('staff_id')) {
+            $staffId = (int) $request->integer('staff_id');
+            in_array($staffId, $this->publicPortfolioStaffIds($business), true)
+                ? $query->where('staff_id', $staffId)
+                : $query->whereRaw('1 = 0');
+        }
+        if ($request->filled('service_id')) {
+            $query->where('service_id', (int) $request->integer('service_id'));
+        }
+        $page = $query->paginate((int) ($request->integer('per_page') ?: 24));
+
+        return response()->json([
+            'data' => $this->serializePublicPortfolio($business, collect($page->items())),
+            'meta' => ['total' => $page->total(), 'current_page' => $page->currentPage(), 'last_page' => $page->lastPage()],
+        ]);
+    }
+
+    private function publicPortfolioQuery(Business $business)
+    {
+        if (!$this->hasColumn('business_media', 'collection')) {
+            return BusinessMedia::query()->whereRaw('1 = 0');
+        }
+
+        return $business->portfolio()->with([
+            'staff:id,name,is_active,is_bookable,show_in_public_team',
+            'service:id,name,is_active',
+        ]);
+    }
+
+    /** Specialists that may be named on a public photo: active and shown in the team or bookable. */
+    private function publicPortfolioStaffIds(Business $business): array
+    {
+        return $this->publicPortfolioStaffIdsCache[$business->id] ??= User::query()
+            ->where('business_id', $business->id)
+            ->where('is_active', true)
+            ->where(fn ($q) => $q->where('show_in_public_team', true)->orWhere('is_bookable', true))
+            ->pluck('id')->map(fn ($id) => (int) $id)->all();
+    }
+
+    private array $publicPortfolioStaffIdsCache = [];
+
+    private function serializePublicPortfolio(Business $business, $items): array
+    {
+        $visibleStaff = array_flip($this->publicPortfolioStaffIds($business));
+
+        return collect($items)->map(function (BusinessMedia $item) use ($visibleStaff) {
+            $staff = $item->staff && isset($visibleStaff[(int) $item->staff->id]) ? $item->staff : null;
+            $service = $item->service && $item->service->is_active ? $item->service : null;
+
+            return [
+                'id' => $item->id,
+                'url' => $item->url,
+                'caption' => $item->caption,
+                'staff' => $staff ? ['id' => (int) $staff->id, 'name' => $staff->name, 'is_bookable' => (bool) $staff->is_bookable] : null,
+                'service' => $service ? ['id' => (int) $service->id, 'name' => $service->name] : null,
+            ];
+        })->values()->all();
+    }
+
+    /** @return array<int,int> tag id => photo count */
+    private function portfolioCounts(Business $business, string $column): array
+    {
+        if (!$this->hasColumn('business_media', 'collection')) return [];
+
+        return BusinessMedia::query()
+            ->where('business_id', $business->id)
+            ->where('collection', BusinessMedia::COLLECTION_PORTFOLIO)
+            ->whereNotNull($column)
+            ->groupBy($column)
+            ->selectRaw($column.' as tag_id, count(*) as aggregate')
+            ->pluck('aggregate', 'tag_id')
+            ->mapWithKeys(fn ($count, $id) => [(int) $id => (int) $count])
+            ->all();
     }
 
     /**
