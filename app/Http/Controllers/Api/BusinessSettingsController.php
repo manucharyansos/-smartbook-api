@@ -68,6 +68,7 @@ class BusinessSettingsController extends Controller
             'website_url' => ['nullable', 'url:http,https', 'max:2048'],
             'messenger_url' => ['nullable', 'url:http,https', 'max:2048'],
             'whatsapp_url' => ['nullable', 'url:http,https', 'max:2048'],
+            'whatsapp_phone' => ['nullable', 'string', 'max:40', 'regex:/^[0-9+()\-\s]*$/'],
             'slot_step_minutes' => ['nullable', 'integer', 'min:5', 'max:60'],
             'work_start' => ['nullable', 'date_format:H:i'],
             'work_end' => ['nullable', 'date_format:H:i', 'after:work_start'],
@@ -117,6 +118,16 @@ class BusinessSettingsController extends Controller
             'show_staff' => array_key_exists('show_staff', $data) ? (bool) $data['show_staff'] : (bool) ($business->show_staff ?? true),
             'show_services' => array_key_exists('show_services', $data) ? (bool) $data['show_services'] : (bool) ($business->show_services ?? true),
         ];
+
+        // The settings form edits a WhatsApp number; keep it and the wa.me link in sync.
+        if (array_key_exists('whatsapp_phone', $data) && Schema::hasColumn('businesses', 'whatsapp_phone')) {
+            $whatsappPhone = trim((string) ($data['whatsapp_phone'] ?? ''));
+            $whatsappDigits = preg_replace('/\D+/', '', $whatsappPhone);
+            $updates['whatsapp_phone'] = $whatsappPhone !== '' ? $whatsappPhone : null;
+            if (! array_key_exists('whatsapp_url', $data)) {
+                $updates['whatsapp_url'] = $whatsappDigits !== '' ? 'https://wa.me/'.$whatsappDigits : null;
+            }
+        }
 
         $profileEnabled = array_key_exists('is_public_profile_enabled', $data)
             ? (bool) $data['is_public_profile_enabled']
@@ -472,6 +483,8 @@ class BusinessSettingsController extends Controller
             'website_url' => $business->website_url,
             'messenger_url' => $business->messenger_url,
             'whatsapp_url' => $business->whatsapp_url,
+            'whatsapp_phone' => $business->whatsapp_phone
+                ?: (preg_match('#^https://wa\.me/(\d+)#', (string) $business->whatsapp_url, $wa) ? '+'.$wa[1] : null),
             'slot_step_minutes' => $business->slot_step_minutes ?? 15,
             'work_start' => $this->serializeTime($business->work_start),
             'work_end' => $this->serializeTime($business->work_end),

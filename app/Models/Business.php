@@ -32,6 +32,7 @@ class Business extends Model
         'website_url',
         'messenger_url',
         'whatsapp_url',
+        'whatsapp_phone',
         'is_onboarding_completed',
         'is_public',
         'is_public_profile_enabled',

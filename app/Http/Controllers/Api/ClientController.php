@@ -39,6 +39,15 @@ class ClientController extends Controller
                     ->where('status', '!=', 'cancelled')
                     ->orderByDesc('starts_at')
                     ->limit(1),
+                // "Last visit" shown on the client card: only visits that already started.
+                'last_visit_at' => Booking::query()
+                    ->select('starts_at')
+                    ->whereColumn('client_id', 'clients.id')
+                    ->whereColumn('bookings.business_id', 'clients.business_id')
+                    ->where('status', '!=', 'cancelled')
+                    ->where('starts_at', '<', now())
+                    ->orderByDesc('starts_at')
+                    ->limit(1),
                 'next_booking_at' => Booking::query()
                     ->select('starts_at')
                     ->whereColumn('client_id', 'clients.id')
@@ -114,7 +123,7 @@ class ClientController extends Controller
             ->paginate($perPage);
 
         $data = collect($paginator->items())
-            ->map(fn (Client $client) => $this->serializeClient($client))
+            ->map(fn (Client $client) => $this->serializeClient($client, $business->effectiveTimezone()))
             ->values();
 
         $groupCounts = $business->clients()
@@ -180,12 +189,13 @@ class ClientController extends Controller
 
         $client = Client::create($data);
 
-        return response()->json(['data' => $this->serializeClient($client->fresh())], 201);
+        return response()->json(['data' => $this->serializeClient($client->fresh(), $business->effectiveTimezone())], 201);
     }
 
     public function show(Client $client, Request $request)
     {
         $business = $request->user()->business;
+        $timezone = $business->effectiveTimezone();
 
         if ((int) $client->business_id !== (int) $business->id) {
             abort(404);
@@ -214,6 +224,7 @@ class ClientController extends Controller
         $lastVisit = $client->bookings()
             ->where('business_id', $business->id)
             ->where('status', '!=', 'cancelled')
+            ->where('starts_at', '<', now())
             ->orderByDesc('starts_at')
             ->first();
 
@@ -239,7 +250,7 @@ class ClientController extends Controller
             ->get();
 
         $timeline = collect()
-            ->merge($recentBookings->map(function ($booking) {
+            ->merge($recentBookings->map(function ($booking) use ($timezone) {
                 return [
                     'id' => 'booking-'.$booking->id,
                     'type' => 'booking',
@@ -247,10 +258,10 @@ class ClientController extends Controller
                     'subtitle' => $booking->staff?->name,
                     'status' => $booking->status,
                     'body' => $booking->notes,
-                    'occurred_at' => optional($booking->starts_at)->format('Y-m-d H:i:s') ?? (string) $booking->starts_at,
+                    'occurred_at' => $this->businessLocal($booking->starts_at, $timezone),
                 ];
             }))
-            ->merge($clientNotes->map(function (ClientNote $note) {
+            ->merge($clientNotes->map(function (ClientNote $note) use ($timezone) {
                 return [
                     'id' => 'note-'.$note->id,
                     'type' => 'note',
@@ -258,7 +269,7 @@ class ClientController extends Controller
                     'subtitle' => $note->user?->name,
                     'status' => $note->note_type,
                     'body' => $note->body,
-                    'occurred_at' => optional($note->created_at)->format('Y-m-d H:i:s'),
+                    'occurred_at' => $this->businessLocal($note->created_at, $timezone),
                 ];
             }))
             ->merge($clientReminders->map(function (ClientReminder $reminder) {
@@ -323,7 +334,7 @@ class ClientController extends Controller
         }
 
         return response()->json([
-            'data' => array_merge($this->serializeClient($client), [
+            'data' => array_merge($this->serializeClient($client, $timezone), [
                 'recent_bookings' => BookingResource::collection($recentBookings),
                 'recent_notes' => $clientNotes->map(fn (ClientNote $note) => [
                     'id' => $note->id,
@@ -331,7 +342,7 @@ class ClientController extends Controller
                     'note_type' => $note->note_type,
                     'is_pinned' => (bool) $note->is_pinned,
                     'author_name' => $note->user?->name,
-                    'created_at' => optional($note->created_at)?->format('Y-m-d H:i:s'),
+                    'created_at' => $this->businessLocal($note->created_at, $timezone),
                 ])->values(),
                 'reminders' => $clientReminders->map(fn (ClientReminder $reminder) => [
                     'id' => $reminder->id,
@@ -358,8 +369,8 @@ class ClientController extends Controller
                     ])->values(),
                 ])->values(),
                 'timeline' => $timeline,
-                'last_booking_at' => optional($lastVisit?->starts_at)->format('Y-m-d H:i:s') ?? ($lastVisit?->starts_at),
-                'next_booking_at' => optional($upcoming?->starts_at)->format('Y-m-d H:i:s') ?? ($upcoming?->starts_at),
+                'last_booking_at' => $this->businessLocal($lastVisit?->starts_at, $timezone),
+                'next_booking_at' => $this->businessLocal($upcoming?->starts_at, $timezone),
                 'total_spent' => $totalSpent,
                 'status_segment' => $this->statusSegment($client, $lastVisit?->starts_at, $upcoming?->starts_at),
                 'crm' => [
@@ -413,7 +424,7 @@ class ClientController extends Controller
 
         $client->update($data);
 
-        return response()->json(['data' => $this->serializeClient($client->fresh())]);
+        return response()->json(['data' => $this->serializeClient($client->fresh(), $business->effectiveTimezone())]);
     }
 
     public function bookings(Client $client, Request $request)
@@ -463,7 +474,24 @@ class ClientController extends Controller
         return 'active';
     }
 
-    private function serializeClient(Client $client): array
+    /**
+     * Booking forms and calendars exchange business-local wall-clock values (see
+     * BookingResource). Client cards must use the same clock, not bare UTC.
+     */
+    private function businessLocal(mixed $value, ?string $timezone): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $date = $value instanceof \DateTimeInterface
+            ? Carbon::instance($value)
+            : Carbon::parse((string) $value, 'UTC');
+
+        return $date->setTimezone($timezone ?: 'Asia/Yerevan')->format('Y-m-d H:i:s');
+    }
+
+    private function serializeClient(Client $client, ?string $timezone = null): array
     {
         return [
             'id' => $client->id,
@@ -489,8 +517,8 @@ class ClientController extends Controller
             'loyalty_points_balance' => (int) ($client->loyalty_points_balance ?? 0),
             'bookings_count' => (int) ($client->bookings_count ?? 0),
             'total_spent' => (int) ($client->total_spent ?? 0),
-            'last_booking_at' => isset($client->last_booking_at) ? (string) $client->last_booking_at : null,
-            'next_booking_at' => isset($client->next_booking_at) ? (string) $client->next_booking_at : null,
+            'last_booking_at' => $this->businessLocal($client->last_visit_at ?? null, $timezone),
+            'next_booking_at' => $this->businessLocal($client->next_booking_at ?? null, $timezone),
             'status_segment' => $this->statusSegment($client, $client->last_booking_at ?? null, $client->next_booking_at ?? null),
             'created_at' => optional($client->created_at)?->format('Y-m-d H:i:s'),
             'updated_at' => optional($client->updated_at)?->format('Y-m-d H:i:s'),
