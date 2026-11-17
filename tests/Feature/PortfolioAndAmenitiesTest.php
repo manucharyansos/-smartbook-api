@@ -123,7 +123,20 @@ it('saves amenities per address and shows them publicly', function () {
         ->assertJsonPath('data.location.amenities', ['wifi', 'parking']);
 });
 
+it('saves the card payment amenity when the config cache predates amenities', function () {
+    config(['amenities' => null]);
+
+    $this->actingAs($this->owner)->patchJson('/api/business/locations/'.$this->location->id, ['amenities' => ['card_payment']])->assertOk()
+        ->assertJsonPath('data.location.amenities', ['card_payment']);
+    $this->getJson('/api/business/settings')->assertOk()
+        ->assertJsonPath('data.amenity_options.2', 'card_payment');
+    $this->getJson('/api/public/businesses/portfolio-salon')->assertOk()
+        ->assertJsonPath('locations.0.amenities', ['card_payment']);
+});
+
 it('lets rental spaces use rental amenities, capacity and area but not the portfolio', function () {
+    config(['amenities' => null]);
+
     $rental = Business::factory()->create([
         'slug' => 'portfolio-rental', 'business_type' => 'rentals', 'vertical' => 'rentals', 'is_onboarding_completed' => true,
         'is_public' => true, 'is_public_profile_enabled' => true, 'rental_hourly_price' => 2000, 'rental_min_minutes' => 60, 'rental_max_minutes' => 240,
@@ -138,6 +151,8 @@ it('lets rental spaces use rental amenities, capacity and area but not the portf
         ->assertJsonPath('data.location.amenities', ['wifi', 'projector'])
         ->assertJsonPath('data.location.capacity_people', 40)
         ->assertJsonPath('data.location.area_sqm', 120);
+    $this->patchJson('/api/business/locations/'.$location->id, ['capacity_people' => 5001, 'area_sqm' => 100001])
+        ->assertUnprocessable()->assertJsonValidationErrors(['capacity_people', 'area_sqm']);
     $this->getJson('/api/public/businesses/portfolio-rental')->assertOk()
         ->assertJsonPath('locations.0.capacity_people', 40)->assertJsonPath('locations.0.area_sqm', 120)
         ->assertJsonPath('portfolio_count', 0);
