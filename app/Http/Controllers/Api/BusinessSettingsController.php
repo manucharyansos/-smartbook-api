@@ -277,8 +277,8 @@ class BusinessSettingsController extends Controller
             'is_active' => ['nullable', 'boolean'],
             'amenities' => ['sometimes', 'nullable', 'array', 'max:50'],
             'amenities.*' => ['string', Rule::in(Amenities::allowedFor($business))],
-            'capacity_people' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.config('amenities.max_capacity_people')],
-            'area_sqm' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.config('amenities.max_area_sqm')],
+            'capacity_people' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.Amenities::MAX_CAPACITY_PEOPLE],
+            'area_sqm' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.Amenities::MAX_AREA_SQM],
         ]);
 
         if (!empty($data['is_primary'])) {
