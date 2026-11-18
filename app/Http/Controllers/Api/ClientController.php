@@ -15,6 +15,16 @@ use Illuminate\Support\Facades\DB;
 
 class ClientController extends Controller
 {
+    /**
+     * A visit that took place: marked done, or confirmed and already over
+     * (businesses often never mark visits done). Same rule as reviews.
+     */
+    public static function finishedVisits($query)
+    {
+        return $query->where('status', 'done')
+            ->orWhere(fn ($q) => $q->where('status', 'confirmed')->where('ends_at', '<=', now()));
+    }
+
     public function index(Request $request)
     {
         $business = $request->user()->business;
@@ -56,11 +66,12 @@ class ClientController extends Controller
                     ->where('starts_at', '>=', now())
                     ->orderBy('starts_at')
                     ->limit(1),
+                // Money from visits that took place only: not upcoming, pending, cancelled or no-show.
                 'total_spent' => Booking::query()
                     ->selectRaw('COALESCE(SUM(final_price), 0)')
                     ->whereColumn('client_id', 'clients.id')
                     ->whereColumn('bookings.business_id', 'clients.business_id')
-                    ->where('status', '!=', 'cancelled'),
+                    ->where(fn (Builder $q) => self::finishedVisits($q)),
             ]);
 
         $search = trim((string) $request->string('search', ''));
@@ -228,12 +239,9 @@ class ClientController extends Controller
             ->orderByDesc('starts_at')
             ->first();
 
-        $totalSpent = (int) ($client->bookings()
-            ->where('business_id', $business->id)
-            ->where('status', '!=', 'cancelled')
-            ->sum('final_price') ?? 0);
-
-        $completedCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'done')->count();
+        $finished = $client->bookings()->where('business_id', $business->id)->where(fn ($q) => self::finishedVisits($q));
+        $totalSpent = (int) ((clone $finished)->sum('final_price') ?? 0);
+        $completedCount = (int) (clone $finished)->count();
         $cancelledCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'cancelled')->count();
         $noShowCount = (int) $client->bookings()->where('business_id', $business->id)->where('status', 'no_show')->count();
         $avgTicket = $completedCount > 0 ? round($totalSpent / $completedCount, 1) : 0.0;
