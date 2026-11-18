@@ -22,3 +22,6 @@ Schedule::command('marketing:dispatch-due')
     ->onOneServer();
 
 Schedule::command('vizit:prune-site-events')->dailyAt('04:10')->onOneServer();
+
+// No-op until REVIEWS_REQUEST_EMAILS=true.
+Schedule::command('reviews:send-requests')->hourlyAt(17)->withoutOverlapping()->onOneServer();

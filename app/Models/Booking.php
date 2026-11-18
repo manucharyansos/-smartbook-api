@@ -12,6 +12,14 @@ class Booking extends Model
 {
     use HasFactory;
 
+    // The review link token is a secret like the guest token; never serialize it.
+    protected $hidden = ['review_token_hash'];
+
+    public function review()
+    {
+        return $this->hasOne(Review::class);
+    }
+
     protected $fillable = [
         'booking_code',
         'group_id',

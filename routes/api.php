@@ -120,6 +120,9 @@ Route::prefix('public')->group(function () {
     Route::get('/businesses/{slug}/services', [PublicBookingController::class, 'services']);
     Route::get('/businesses/{slug}/staff', [PublicBookingController::class, 'staff']);
     Route::get('/businesses/{slug}/portfolio', [PublicBookingController::class, 'portfolio'])->middleware('throttle:120,1');
+    Route::get('/businesses/{slug}/reviews', [\App\Http\Controllers\Api\Public\PublicReviewController::class, 'index'])->middleware('throttle:120,1');
+    Route::get('/bookings/{code}/review', [\App\Http\Controllers\Api\Public\PublicReviewController::class, 'show'])->middleware('throttle:60,1');
+    Route::post('/bookings/{code}/review', [\App\Http\Controllers\Api\Public\PublicReviewController::class, 'store'])->middleware('throttle:10,1');
     Route::get('/businesses/{slug}/availability', [PublicBookingController::class, 'availability']);
     // Multi-service availability for public bookings
     Route::get('/businesses/{slug}/availability/multi', [PublicBookingController::class, 'availabilityMulti']);
@@ -236,6 +239,7 @@ Route::prefix('client/auth')->group(function () {
 
 Route::prefix('client')->middleware('auth:sanctum')->group(function () {
     Route::get('cabinet/bookings', [ClientCabinetController::class, 'bookings']);
+    Route::post('cabinet/bookings/{booking}/review', [ClientCabinetController::class, 'review'])->whereNumber('booking')->middleware('throttle:20,1');
     Route::post('cabinet/bookings/{booking}/access', [ClientCabinetController::class, 'access'])
         ->whereNumber('booking')
         ->middleware('throttle:30,1');
@@ -349,6 +353,11 @@ Route::middleware(['auth:sanctum', 'ensure.business', 'ensure.onboarded', 'ensur
         Route::post('/business/locations', [BusinessSettingsController::class, 'storeLocation'])->name('business.locations.store');
         Route::patch('/business/locations/{location}', [BusinessSettingsController::class, 'updateLocation'])->name('business.locations.update');
         Route::delete('/business/locations/{location}', [BusinessSettingsController::class, 'destroyLocation'])->name('business.locations.destroy');
+
+        // Reviews: read, answer publicly, report abuse (hiding is for Vizit's super admin).
+        Route::get('/reviews', [\App\Http\Controllers\Api\ReviewController::class, 'index'])->name('reviews.index');
+        Route::put('/reviews/{review}/reply', [\App\Http\Controllers\Api\ReviewController::class, 'reply'])->whereNumber('review')->name('reviews.reply');
+        Route::post('/reviews/{review}/report', [\App\Http\Controllers\Api\ReviewController::class, 'report'])->whereNumber('review')->middleware('throttle:20,1')->name('reviews.report');
 
         // Work photos tagged with a specialist and/or a service.
         Route::get('/portfolio', [\App\Http\Controllers\Api\PortfolioController::class, 'index'])->name('portfolio.index');
@@ -611,6 +620,8 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/admins/{admin}/password', [AdminManagementController::class, 'updatePassword'])->middleware('admin:super_admin');
 
     Route::get('/logs', [LogController::class, 'index'])->middleware('admin:super_admin');
+    Route::get('/reviews', [\App\Http\Controllers\Admin\ReviewModerationController::class, 'index'])->middleware('admin:super_admin');
+    Route::patch('/reviews/{review}', [\App\Http\Controllers\Admin\ReviewModerationController::class, 'update'])->whereNumber('review')->middleware('admin:super_admin');
     Route::get('/logs/{id}', [LogController::class, 'show'])->middleware('admin:super_admin');
     Route::get('/logs/admin/{adminId}', [LogController::class, 'adminLogs'])->middleware('admin:super_admin');
 

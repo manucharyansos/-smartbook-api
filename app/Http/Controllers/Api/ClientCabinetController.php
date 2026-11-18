@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\ClientAccount;
 use App\Services\GuestBookingAccessService;
+use App\Services\ReviewService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -25,14 +26,17 @@ class ClientCabinetController extends Controller
                 'business:id,name,slug,logo_url,address,business_type',
                 'service:id,name,duration_minutes,price,currency',
                 'staff:id,name,avatar_url',
+                'review',
             ])
             ->orderByDesc('starts_at')
             ->get();
 
         $today = now()->startOfDay();
 
-        $format = function (Booking $booking) {
+        $reviews = app(ReviewService::class);
+        $format = function (Booking $booking) use ($reviews) {
             return [
+                'review_state' => $reviews->stateFor($booking),
                 'id' => $booking->id,
                 'booking_code' => $booking->booking_code,
                 'status' => $booking->status,
@@ -97,6 +101,22 @@ class ClientCabinetController extends Controller
                 'manage_token' => $access->issue($owned),
             ],
         ]);
+    }
+
+    /** POST client/cabinet/bookings/{booking}/review — the signed-in client reviews a finished visit. */
+    public function review(Request $request, int $booking, ReviewService $reviews)
+    {
+        /** @var ClientAccount $account */
+        $account = $request->user();
+        abort_unless($account instanceof ClientAccount, 401);
+        $data = $request->validate([
+            'rating' => ['required', 'integer', 'between:1,5'],
+            'comment' => ['nullable', 'string', 'max:'.config('reviews.comment_max', 1000)],
+        ]);
+        $owned = $this->ownedBookings($account, $this->linkedClientIds($account))->whereKey($booking)->first();
+        abort_unless($owned, 404);
+
+        return response()->json(['data' => $reviews->serializeOwn($reviews->create($owned, $data))], 201);
     }
 
     private function linkedClientIds(ClientAccount $account): Collection

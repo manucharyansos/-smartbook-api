@@ -24,6 +24,8 @@ use App\Services\GuestBookingAccessService;
 use App\Services\LoyaltyService;
 use App\Services\WaitlistService;
 use App\Services\ServiceDiscountService;
+use App\Services\ReviewService;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use App\Support\Phone;
 use Illuminate\Http\Request;
@@ -144,6 +146,14 @@ class PublicBookingController extends Controller
         return $query;
     }
 
+    /** Specialists whose name may match a public search: active and shown in the team or bookable. */
+    private function scopePublicStaffSearch($query, string $search)
+    {
+        return $query->where('is_active', true)
+            ->where(fn ($q) => $q->where('show_in_public_team', true)->orWhere('is_bookable', true))
+            ->where('name', 'like', "%{$search}%");
+    }
+
     private function scopePublicBookableProviders($query)
     {
         if ($this->hasColumn('users', 'is_active')) {
@@ -221,6 +231,52 @@ class PublicBookingController extends Controller
         return $query;
     }
 
+    /** Used by PublicReviewController: same visibility rules as the public profile. */
+    public function publicBusinessForReviews(string $slug): Business
+    {
+        return $this->publicBusinessQuery($slug)->firstOrFail();
+    }
+
+    private const DAY_PARTS = ['morning' => [6, 12], 'afternoon' => [12, 17], 'evening' => [17, 24]];
+
+    /**
+     * Up to three free start times on a day (business-local "HH:MM"), optionally inside a part of the day.
+     * Services: the shortest active individual service must fit with any bookable specialist.
+     * Rentals: the minimum rental duration must fit. Cached briefly because the directory checks many businesses.
+     */
+    private function freeSlotsFor(Business $business, string $date, ?string $part): array
+    {
+        return Cache::remember("directory-free:{$business->id}:{$date}:".($part ?: 'all'), 300, function () use ($business, $date, $part) {
+            try {
+                if ($business->isRental()) {
+                    $minutes = (int) ($business->rental_min_minutes ?: 60);
+                    $slots = app(RentalBookingService::class)->slots($business, $date, $minutes);
+                    $serviceId = null;
+                } else {
+                    $service = Service::query()->where('business_id', $business->id)->where('is_active', true)
+                        ->where(fn ($q) => $q->whereNull('booking_mode')->orWhere('booking_mode', '!=', 'group'))
+                        ->orderBy('duration_minutes')->orderBy('id')->first();
+                    if (!$service) return [];
+                    $slots = app(AvailabilityService::class)->slotsForSelection([$service->id], $date, $business->id);
+                    $serviceId = (int) $service->id;
+                }
+            } catch (\Throwable) {
+                return [];
+            }
+            [$from, $to] = $part ? self::DAY_PARTS[$part] : [0, 24];
+            $out = [];
+            foreach ($slots as $slot) {
+                $time = substr((string) $slot['starts_at'], 11, 5);
+                $hour = (int) substr($time, 0, 2);
+                if ($hour < $from || $hour >= $to || isset($out[$time])) continue;
+                $out[$time] = ['time' => $time, 'service_id' => $serviceId];
+                if (count($out) >= 3) break;
+            }
+
+            return array_values($out);
+        });
+    }
+
     public function index(Request $request)
     {
         $data = $request->validate([
@@ -234,6 +290,9 @@ class PublicBookingController extends Controller
             'lng' => ['nullable', 'numeric', 'between:-180,180'],
             'radius' => ['nullable', 'numeric', 'min:0.5', 'max:100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            // "Free time on this day": only businesses with at least one free start time that day.
+            'date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:'.now('Asia/Yerevan')->subDay()->toDateString(), 'before_or_equal:'.now('Asia/Yerevan')->addDays(60)->toDateString()],
+            'part' => ['nullable', 'in:morning,afternoon,evening'],
         ]);
 
         try {
@@ -297,7 +356,7 @@ class PublicBookingController extends Controller
             }
             if (!empty($data['search'])) {
                 $search = trim($data['search']);
-                $query->where(function ($inner) use ($search, $hasLocations) {
+                $query->where(function ($inner) use ($search, $hasLocations, $hasUsers) {
                     $first = true;
                     foreach (['name', 'address', 'slug', 'custom_category_name'] as $column) {
                         if ($this->hasColumn('businesses', $column)) {
@@ -318,6 +377,9 @@ class PublicBookingController extends Controller
                                 }
                             });
                         });
+                    }
+                    if ($hasUsers) {
+                        $inner->orWhereHas('users', fn ($staff) => $this->scopePublicStaffSearch($staff, $search));
                     }
                 });
             }
@@ -348,8 +410,36 @@ class PublicBookingController extends Controller
                 $query->orderByDesc('id');
             }
 
-            $businesses = $query->limit($perPage)->get()
-                ->map(fn (Business $business) => $this->serializePublicBusiness($business, $lat, $lng))
+            $date = $data['date'] ?? null;
+            $part = $data['part'] ?? null;
+            // With a day filter more candidates are checked, then only those with free time are kept.
+            $models = $query->limit($date ? max($perPage, 60) : $perPage)->get();
+            $freeSlots = [];
+            if ($date) {
+                $models = $models->filter(function (Business $business) use ($date, $part, &$freeSlots) {
+                    $freeSlots[$business->id] = $this->freeSlotsFor($business, $date, $part);
+
+                    return (bool) $freeSlots[$business->id];
+                })->take($perPage)->values();
+            }
+            $ratings = app(ReviewService::class)->businessSummaries($models->pluck('id')->all());
+            $matchedStaff = [];
+            if (!empty($data['search']) && $hasUsers && $models->isNotEmpty()) {
+                $matchedStaff = User::query()->whereIn('business_id', $models->pluck('id'))
+                    ->tap(fn ($staff) => $this->scopePublicStaffSearch($staff, trim($data['search'])))
+                    ->orderBy('name')->get(['id', 'name', 'business_id', 'is_bookable'])
+                    ->groupBy('business_id')
+                    ->map(fn ($group) => $group->take(3)->map(fn (User $user) => ['id' => (int) $user->id, 'name' => $user->name, 'is_bookable' => (bool) $user->is_bookable])->values()->all())
+                    ->all();
+            }
+
+            $businesses = $models
+                ->map(fn (Business $business) => [
+                    ...$this->serializePublicBusiness($business, $lat, $lng),
+                    'rating' => $ratings[$business->id] ?? ['count' => 0, 'average' => null],
+                    'matched_staff' => $matchedStaff[$business->id] ?? [],
+                    'free_slots' => $freeSlots[$business->id] ?? [],
+                ])
                 ->values();
 
             if ($lat !== null && $lng !== null) {
@@ -369,6 +459,8 @@ class PublicBookingController extends Controller
                         'lat' => $lat,
                         'lng' => $lng,
                         'radius' => $lat !== null && $lng !== null ? $radius : null,
+                        'date' => $data['date'] ?? null,
+                        'part' => $data['part'] ?? null,
                     ],
                 ],
             ]);
@@ -596,6 +688,7 @@ class PublicBookingController extends Controller
             'show_services' => !$business->isRental() && (bool) ($business->show_services ?? true),
             'service_discounts' => $business->isRental() ? null : app(ServiceDiscountService::class)->tiers($business),
             'gallery' => $business->relationLoaded('gallery') ? $business->gallery : [],
+            'rating' => $this->hasTable('reviews') ? app(ReviewService::class)->summary($business) : ['average' => null, 'count' => 0, 'shown' => false],
             'portfolio_count' => $business->isRental() ? 0 : $this->publicPortfolioQuery($business)->count(),
             'portfolio_preview' => $business->isRental() ? [] : $this->serializePublicPortfolio($business, $this->publicPortfolioQuery($business)->limit(12)->get()),
             'rental' => $business->isRental() ? [
@@ -652,7 +745,11 @@ class PublicBookingController extends Controller
             ->orderBy('name')
             ->get($this->filterColumnsForOptionalLocation('users', ['id', 'name', 'role', 'avatar_url', 'bio', 'is_bookable', 'location_id']));
         $counts = $this->portfolioCounts($business, 'staff_id');
-        $staff->each(fn (User $member) => $member->setAttribute('portfolio_count', (int) ($counts[$member->id] ?? 0)));
+        $ratings = $this->hasTable('reviews') ? app(ReviewService::class)->staffSummaries($business->id) : [];
+        $staff->each(function (User $member) use ($counts, $ratings) {
+            $member->setAttribute('portfolio_count', (int) ($counts[$member->id] ?? 0));
+            $member->setAttribute('rating', $ratings[$member->id] ?? ['count' => 0, 'average' => null]);
+        });
 
         return response()->json([
             'data' => $staff,
@@ -2449,6 +2546,8 @@ class PublicBookingController extends Controller
                 ->makeHidden(['phone_verification_code_hash', 'guest_access_token_hash'])
                 ->toArray();
             $payload['can_reschedule'] = $this->canReschedulePublicBooking($item);
+            $payload['review_state'] = $this->hasTable('reviews') ? app(ReviewService::class)->stateFor($item) : null;
+            unset($payload['review']);
             $payload['reschedule_deadline'] = $this->rescheduleDeadline($item);
 
             return $payload;
